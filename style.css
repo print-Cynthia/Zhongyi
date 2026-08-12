@@ -1,0 +1,1239 @@
+/* 
+ * 草本知行 - 全局视觉重构样式表
+ * 现代简洁 | 轻中式 | 高级留白 | 2.5D 药柜
+ */
+
+:root {
+    --bg-page: #FAF7EF;
+    --text-main: #25352B;
+    --text-muted: #6F7A70;
+    --primary-green: #3F6543;
+    --deep-green: #243C2C;
+    --light-green-bg: #EAF1E7;
+    --wood-dark: #9B6B43;
+    --wood-main: #B98756;
+    --wood-light: #D7B58A;
+    --border-color: #E5D8C5;
+    --card-white: #FFFDF8;
+    --shadow-soft: 0 10px 30px -5px rgba(0, 0, 0, 0.05);
+    --shadow-deep: 0 20px 40px -10px rgba(0, 0, 0, 0.1);
+}
+
+/* 全局重置 */
+body {
+    background-color: var(--bg-page);
+    color: var(--text-main);
+    font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    margin: 0;
+    padding: 0;
+    line-height: 1.6;
+    overflow-x: hidden;
+}
+
+a { text-decoration: none; color: inherit; }
+button, input, textarea { font-family: inherit; outline: none; }
+
+/* 导航栏 */
+.navbar {
+    height: 64px;
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    padding: 0 40px;
+}
+
+.nav-container {
+    max-width: 1280px;
+    width: 100%;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--primary-green);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.nav-links {
+    display: flex;
+    gap: 32px;
+}
+
+.nav-item {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-muted);
+    transition: color 0.3s;
+    cursor: pointer;
+}
+
+.nav-item.active, .nav-item:hover {
+    color: var(--primary-green);
+}
+
+/* 页面切换：任意时刻只显示一个主区域 */
+#home-section,
+#search-section,
+#symptom-section,
+#detail-section {
+    display: none !important;
+}
+
+#home-section.page-active {
+    display: flex !important;
+}
+
+#search-section.page-active,
+#symptom-section.page-active,
+#detail-section.page-active {
+    display: block !important;
+}
+
+/* 首页布局 */
+.hero-layout {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    max-width: 1440px !important;        /* 从原本较窄的宽度拓宽至 1440px */
+    width: 95% !important;
+    margin: 0 auto !important;
+    padding: 0 40px !important;
+    height: calc(100vh - 64px) !important;
+    box-sizing: border-box !important;
+    position: relative !important;
+    overflow: visible !important;
+}
+
+.hero-left {
+    width: 42% !important;
+    flex-shrink: 0 !important;
+    padding-left: 44px !important;       /* 左侧内容右移，避免贴边 */
+    box-sizing: border-box !important;
+    z-index: 2 !important; /* 保证左侧搜索区在药柜上方，不被遮挡 */
+
+    /* 左侧整体向上微调 */
+    margin-top: -20px !important;
+    transform: translateY(-10px) !important;
+}
+
+.hero-right {
+    width: 60% !important;
+    display: flex !important;
+    justify-content: center !important;   /* 药柜居中偏右 */
+    align-items: center !important;
+    position: relative !important;
+    height: 100% !important;
+    padding-right: 20px !important;       /* 右侧留一点空隙，不贴边 */
+    padding-left: 0 !important;
+    box-sizing: border-box !important;
+    z-index: 1 !important;
+}
+
+/* v1.34：桌面端首页在原基础上继续向左微移，卡片右侧保留更多空隙 */
+@media (min-width: 1101px) {
+    .hero-layout {
+        transform: translateX(-36px) !important;
+    }
+}
+
+/* 主标题：加大字号，做视觉锚点 */
+.main-title {
+    font-size: 60px !important;
+    line-height: 1.2 !important;
+    font-weight: 700 !important;
+    color: var(--deep-green);
+    margin: 28px 0 10px 0;
+}
+
+.sub-title {
+    white-space: nowrap !important;       /* 强制单行不换行 */
+    font-size: 14px !important;
+    color: #666666 !important;
+    margin-bottom: 24px !important;
+    max-width: none !important;
+}
+
+/* 搜索面板 */
+.search-container {
+    background: white;
+    height: 64px;
+    border-radius: 32px;
+    display: flex;
+    align-items: center;
+    padding: 4px 6px 4px 24px;
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-soft);
+    margin-bottom: 24px;
+    transition: box-shadow 0.3s;
+}
+
+.search-container:focus-within {
+    box-shadow: var(--shadow-deep);
+    border-color: var(--primary-green);
+}
+
+.search-input {
+    flex: 1;
+    border: none;
+    font-size: 16px;
+    color: var(--text-main);
+    background: transparent;
+}
+
+.search-button {
+    background: var(--primary-green);
+    color: white;
+    border: none;
+    padding: 0 28px;
+    height: 52px;
+    border-radius: 26px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s, opacity 0.2s;
+}
+
+.search-button:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+/* 快捷标签：6个标签强制单行平铺 */
+.tag-container {
+    display: flex !important;
+    flex-wrap: nowrap !important;       /* 强制不换行，保持同一行 */
+    align-items: center !important;
+    gap: 8px !important;
+    margin-bottom: 24px !important;
+    overflow-x: auto !important;         /* 超小屏幕下支持横向滑动，防止挤压变形 */
+}
+
+.tag-pill {
+    flex-shrink: 0 !important;          /* 防止被压缩 */
+    background: var(--light-green-bg);
+    color: var(--primary-green);
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.tag-pill:hover {
+    background: var(--primary-green);
+    color: white;
+}
+
+/* 功能卡片 */
+.entry-container {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 0;
+}
+
+.entry-card {
+    background: var(--card-white);
+    padding: 18px 20px;
+    border-radius: 20px;
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-soft);
+    flex: 1;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.entry-card:hover {
+    transform: translateY(-6px);
+    box-shadow: var(--shadow-deep);
+    border-color: var(--primary-green);
+}
+
+.entry-card h3 {
+    margin: 0 0 4px 0;
+    font-size: 18px;
+    color: var(--deep-green);
+}
+
+.entry-card p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+/* 页脚免责声明：长页面进入文档流，首页桌面端单独固定在首屏底部 */
+.disclaimer {
+    position: static !important;
+    width: auto !important;
+    box-sizing: border-box;
+    margin: 48px auto 20px !important;
+    padding: 0 20px;
+    text-align: center !important;
+    font-size: 12px !important;
+    color: #999999 !important;
+    pointer-events: none !important;
+}
+
+@media (min-width: 901px) {
+    body.home-page-active {
+        height: 100vh;
+        overflow-y: hidden;
+    }
+
+    body.home-page-active .disclaimer {
+        position: fixed !important;
+        left: 50% !important;
+        bottom: 12px !important;
+        z-index: 10;
+        width: calc(100% - 120px) !important;
+        margin: 0 !important;
+        transform: translateX(-50%) !important;
+    }
+}
+
+/* --- 2.5D 药柜 --- */
+.cabinet-wrapper {
+    width: 420px !important;
+    height: 400px !important;
+    position: relative !important;
+    perspective: 1200px !important;
+    perspective-origin: 30% 50% !important;
+    margin: 0 !important;
+    transform: none !important;
+}
+
+.medicine-cabinet {
+    width: 100% !important;
+    height: 100% !important;
+    position: relative !important;
+    transform-style: preserve-3d !important;
+    /* rotateX 降至 1.5deg，rotateY 保持 -14deg，呈现自然舒展的 2.5D 透视，解决“向下倒”问题 */
+    transform: rotateY(-14deg) rotateX(1.5deg) !important;
+    transform-origin: left center !important;
+    margin: 0 !important;
+    background: #B08B66 !important;
+    border: 10px solid #8C6543 !important;
+    border-radius: 4px !important;
+    box-shadow: -20px 25px 40px rgba(0, 0, 0, 0.15) !important;
+    overflow: visible !important;
+    box-sizing: border-box;
+}
+
+/* 1. 3D 容器视口 */
+.hero-right,
+.cabinet-wrapper {
+    perspective: 1200px !important;
+    perspective-origin: 30% 50% !important;
+    overflow: visible !important;   /* 关键：禁止裁剪 3D 侧板/顶板 */
+}
+
+/* 实体 3D 顶面 + 右侧面：用真实 rotateX/rotateY 折角，不再是平面斜切 */
+.cabinet-top-panel {
+    position: absolute !important;
+    top: -10px !important;                 /* 对齐上边框外沿 */
+    left: -10px !important;
+    width: calc(100% + 20px) !important;
+    height: 46px !important;               /* 柜体厚度/深度 */
+    background: linear-gradient(90deg, #8B6138 0%, #B88E68 100%) !important;
+    transform: rotateX(-90deg) !important; /* 向后折出顶面 */
+    transform-origin: top center !important;
+    box-shadow: inset 0 -10px 20px rgba(0,0,0,0.35) !important;
+    pointer-events: none !important;
+    display: block !important;
+}
+
+/* 右侧立体木板：采用 clip-path 梯形无缝贴合（放弃易翻车的 rotateY 3D 旋转） */
+.cabinet-side-panel {
+    position: absolute !important;
+    top: -10px !important;        /* 完美上接外框顶边 */
+    bottom: -10px !important;     /* 完美下接外框底边 */
+    right: -56px !important;      /* 扩展至 56px 厚度 */
+    width: 56px !important;
+    height: calc(100% + 20px) !important;
+    background: linear-gradient(to right, #5A3E27, #3A2616) !important; /* 沉稳深木渐变 */
+    /* 配合 56px 厚度调整梯形裁切比例 */
+    clip-path: polygon(0% 0%, 100% 4%, 100% 96%, 0% 100%) !important;
+    pointer-events: none !important;
+    display: block !important;
+    z-index: -1 !important; /* 垫在正面框架边缘下方，消除缝隙 */
+    border-radius: 0 3px 3px 0 !important;
+}
+
+/* 抽屉网格：深色凹陷底，制造抽屉“嵌入木架深处”的立体感 */
+.cabinet-grid {
+    position: absolute;
+    inset: 16px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-template-rows: repeat(4, 1fr);
+    gap: 12px;
+    transform-style: preserve-3d;
+    background: radial-gradient(ellipse at center, #3a2415 0%, #22150c 100%);
+    border-radius: 4px;
+    box-shadow: inset 0 0 30px rgba(0,0,0,0.75);
+}
+
+.cabinet-drawer {
+    position: relative;
+    transform-style: preserve-3d;
+    cursor: pointer;
+}
+
+/* 抽屉 3D 盒体：默认嵌入柜内，打开时沿 Z 轴轻拉出 */
+.drawer-box {
+    position: absolute;
+    inset: 0;
+    transform-style: preserve-3d;
+    transform: translateZ(-22px);
+    transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cabinet-drawer:hover .drawer-box,
+.cabinet-drawer.open .drawer-box {
+    transform: translateZ(30px);   /* 简洁轻盈：仅沿视角向外拉出 */
+}
+
+.drawer-face {
+    position: absolute;
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
+}
+
+.drawer-front {
+    inset: 0;
+    background: linear-gradient(135deg, var(--wood-light) 0%, #CFb38B 100%);
+    border: 1px solid var(--wood-dark);
+    border-radius: 2px;
+    transform: translateZ(22px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-shadow:
+        inset 2px 2px 4px rgba(255,255,255,0.22),
+        inset -2px -2px 5px rgba(0,0,0,0.12),
+        0 4px 10px rgba(0,0,0,0.16);   /* 干净清爽的柔和落影 */
+}
+
+/* 拉出时投影自然加深，不叠加复杂内阴影 */
+.cabinet-drawer:hover .drawer-front,
+.cabinet-drawer.open .drawer-front {
+    box-shadow:
+        inset 2px 2px 4px rgba(255,255,255,0.22),
+        inset -2px -2px 5px rgba(0,0,0,0.12),
+        0 16px 30px rgba(0,0,0,0.34);
+}
+
+.drawer-back {
+    inset: 0;
+    background: #3a2415;
+    transform: rotateY(180deg) translateZ(22px);
+}
+
+.drawer-left {
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 44px;
+    background: #7A5232;
+    transform: rotateY(90deg) translateZ(22px);
+    box-shadow: inset -10px 0 14px rgba(0,0,0,0.24);
+}
+
+.drawer-right {
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 44px;
+    background: #A67C52;
+    transform: rotateY(-90deg) translateZ(22px);
+    box-shadow: inset 10px 0 14px rgba(0,0,0,0.12);
+}
+
+.drawer-top {
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 44px;
+    background: #C4A77D;
+    transform: rotateX(90deg) translateZ(22px);
+    box-shadow: inset 0 -10px 14px rgba(0,0,0,0.16);
+}
+
+.drawer-bottom {
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 44px;
+    background: #3a2415;
+    transform: rotateX(-90deg) translateZ(22px);
+    box-shadow: inset 0 10px 14px rgba(0,0,0,0.26);
+}
+
+.drawer-label {
+    background: #FFFDF6;            /* 白/米黄底 */
+    padding: 2px 7px;
+    font-size: 11px;
+    color: #2B2B2B;                /* 黑色字，字迹清晰 */
+    border: 1px solid #E6D8C3;
+    border-radius: 2px;
+    box-shadow: 1px 1px 3px rgba(0,0,0,0.15);
+    font-weight: 700;
+}
+
+/* 极简古铜色半圆环拉手（素雅线条，替代生硬的金色重圆圈） */
+.drawer-ring {
+    width: 22px;
+    height: 11px;
+    margin-top: 10px;
+    border: 2px solid #8C6A3F;        /* 古铜色线条 */
+    border-bottom: none;
+    border-radius: 22px 22px 0 0;     /* 上半圆，形成半圆环拉手 */
+    background: transparent;
+    box-sizing: border-box;
+}
+
+/* 1. “草本探索”引导卡片：彻底隐藏，不在右侧占位（由底部单行提示取代） */
+.herb-explore-card, #explore-card,
+.daily-placeholder, #daily-placeholder {
+    display: none !important;            /* 隐藏提示卡片 */
+}
+
+/* 2. “药材科普”详情卡片：仅覆盖药柜侧板，不遮挡正面，右侧留安全间距 */
+.daily-herb-card, #daily-card {
+    /* 定位：以药柜右侧为基准，微向左拉仅覆盖侧板厚度，不压正面抽屉 */
+    position: absolute !important;
+    top: 50% !important;
+    left: 100% !important;
+    margin-left: -10px !important;       /* 仅切入侧板边缘，不遮挡正面抽屉 */
+    right: auto !important;
+    transform: translateY(-50%) !important;
+
+    /* 保持精致卡片视觉规范 */
+    width: 230px !important;
+    box-sizing: border-box !important;
+    background: #FFFDF8 !important;
+    border: 1px solid #E5D8C5 !important;
+    border-radius: 20px !important;
+    padding: 20px !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08) !important;
+    z-index: 100 !important;
+    pointer-events: auto !important;
+
+    /* 保留显隐切换（选中抽屉时显示，空白收起时隐藏） */
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.35s ease, visibility 0.35s ease;
+}
+
+.daily-herb-card.visible, #daily-card.visible {
+    opacity: 1;
+    visibility: visible;
+}
+
+.daily-herb-card h4 { margin: 0 0 6px 0; color: var(--wood-dark); font-size: 13px; }
+.daily-herb-card h2 { margin: 0 0 12px 0; color: var(--primary-green); font-size: 24px; }
+.daily-herb-card p { font-size: 13px; color: var(--text-muted); line-height: 1.5; margin-bottom: 16px; }
+
+/* 3. 药柜下方引导文字：已移除，抽屉本身交互隐喻足够 */
+.cabinet-bottom-hint, #cabinet-hint {
+    display: none !important;             /* 直接隐藏 */
+}
+
+/* --- 查询页样式 --- */
+.page-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 64px 40px;
+}
+
+.page-header {
+    text-align: center;
+    margin-bottom: 36px;
+}
+
+.page-header h1 { font-size: 40px; color: var(--deep-green); margin-bottom: 12px; }
+.page-header p { color: var(--text-muted); font-size: 16px; }
+.page-header .search-status {
+    display: inline-block;
+    margin: 16px 0 0;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--light-green-bg);
+    color: var(--primary-green);
+    font-size: 13px;
+}
+
+.search-panel {
+    background: white;
+    padding: 32px;
+    border-radius: 24px;
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-soft);
+    margin-bottom: 36px;
+    overflow: visible;
+}
+
+.home-search-container {
+    position: relative;
+    z-index: 120;
+}
+
+.library-search-container {
+    position: relative;
+    z-index: 20;
+}
+
+.search-suggestions {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    max-height: 336px;
+    overflow-y: auto;
+    padding: 8px;
+    background: var(--card-white);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    box-shadow: var(--shadow-deep);
+    z-index: 130;
+}
+
+.search-suggestions[hidden] {
+    display: none;
+}
+
+.search-suggestion {
+    width: 100%;
+    min-height: 54px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 14px;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-main);
+    cursor: pointer;
+    text-align: left;
+}
+
+.search-suggestion:hover,
+.search-suggestion.active,
+.search-suggestion:focus-visible {
+    background: var(--light-green-bg);
+    color: var(--primary-green);
+}
+
+.suggestion-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.suggestion-name {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.suggestion-meta {
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: 12px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.suggestion-type {
+    flex-shrink: 0;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.type-herb { background: #EAF1E7; color: #3F6543; }
+.type-effect { background: #FEF3C7; color: #92400E; }
+.type-symptom { background: #E8EFF8; color: #315B7D; }
+
+.filter-tags {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.filter-tag {
+    padding: 8px 20px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    background: var(--light-green-bg);
+    color: var(--primary-green);
+    transition: all 0.3s;
+}
+
+.filter-tag.active {
+    background: var(--primary-green);
+    color: white;
+}
+
+/* 药材网格 */
+.herb-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 20px;
+}
+
+.herb-grid.grouped-view {
+    display: block;
+}
+
+.herb-category-group {
+    margin-bottom: 40px;
+}
+
+.category-group-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.category-group-header h2 {
+    margin: 0;
+    color: var(--deep-green);
+    font-size: 22px;
+}
+
+.category-group-header span {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.herb-group-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 20px;
+}
+
+.search-empty-state {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 56px 24px;
+    background: var(--card-white);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+}
+
+.search-empty-state h3 {
+    margin: 0 0 8px;
+    color: var(--deep-green);
+    font-size: 20px;
+}
+
+.search-empty-state p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.search-empty-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.secondary-action {
+    height: 52px;
+    padding: 0 24px;
+    border: 1px solid var(--border-color);
+    border-radius: 26px;
+    background: var(--card-white);
+    color: var(--primary-green);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.secondary-action:hover {
+    border-color: var(--primary-green);
+    background: var(--light-green-bg);
+}
+
+.herb-card {
+    min-height: 210px;
+    box-sizing: border-box;
+    background: var(--card-white);
+    padding: 22px;
+    border-radius: 18px;
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-soft);
+    transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+}
+
+.herb-card:hover,
+.herb-card:focus-visible {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-deep);
+    border-color: var(--primary-green);
+    outline: none;
+}
+
+.herb-card h3 { font-size: 20px; color: var(--primary-green); margin: 0 0 12px 0; }
+
+.herb-tag-row { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.herb-label { font-size: 11px; background: #FEF3C7; color: #92400E; padding: 2px 8px; border-radius: 4px; }
+.herb-effect { font-size: 11px; background: #DBEAFE; color: #1E40AF; padding: 2px 8px; border-radius: 4px; }
+
+.herb-intro { font-size: 13px; color: var(--text-muted); line-height: 1.5; margin-bottom: 20px; flex: 1; }
+
+.view-detail {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--primary-green);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* 药材详情页（方案 B：全屏，桌面双栏 / 移动单栏） */
+.detail-back {
+    position: fixed;
+    top: 88px;
+    left: 40px;
+    z-index: 90;
+    background: var(--light-green-bg);
+    color: var(--primary-green);
+    border: none;
+    padding: 10px 22px;
+    border-radius: 22px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+}
+.detail-back:hover { background: var(--primary-green); color: white; }
+
+#detail-section { padding-top: 120px; }
+
+.detail-layout {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 64px;
+    align-items: start;
+}
+
+.detail-aside {
+    position: sticky;
+    top: 144px;
+    background: var(--card-white);
+    border: 1px solid var(--border-color);
+    border-radius: 24px;
+    padding: 36px;
+    box-shadow: var(--shadow-soft);
+    box-sizing: border-box;
+}
+
+@media (min-width: 1280px) {
+    .detail-aside {
+        position: fixed;
+        top: 144px;
+        left: calc((100vw - 1100px) / 2);
+        width: 340px;
+        max-height: calc(100vh - 160px);
+        overflow-y: auto;
+    }
+}
+
+.detail-kicker {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 4px 10px;
+    margin-bottom: 16px;
+    border-radius: 999px;
+    background: var(--light-green-bg);
+    color: var(--primary-green);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.detail-title {
+    font-size: 44px;
+    color: var(--primary-green);
+    margin: 0 0 6px 0;
+    line-height: 1.1;
+}
+
+.detail-latin {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 14px;
+    margin: 0 0 16px 0;
+}
+
+.detail-summary {
+    margin: 0 0 28px;
+    color: var(--text-main);
+    font-size: 15px;
+    line-height: 1.75;
+    font-weight: 600;
+}
+
+.detail-quick {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 28px;
+}
+
+.detail-quick-item {
+    background: var(--light-green-bg);
+    padding: 16px 18px;
+    border-radius: 14px;
+}
+
+.detail-quick-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.detail-quick-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.detail-tags {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.detail-tags span {
+    border: 1px solid var(--border-color);
+    padding: 5px 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    color: var(--primary-green);
+    background: white;
+}
+
+.detail-main {
+    min-width: 0;
+    padding: 12px 0 80px;
+}
+
+.detail-block {
+    margin-bottom: 40px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid rgba(229, 216, 197, 0.7);
+}
+
+.detail-block:last-child { border-bottom: none; }
+
+.detail-block h4 {
+    font-weight: 700;
+    font-size: 18px;
+    margin: 0 0 14px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--deep-green);
+}
+
+.detail-block h4::before {
+    content: '';
+    width: 4px;
+    height: 18px;
+    background: var(--wood-main);
+    border-radius: 2px;
+}
+
+.detail-block p {
+    font-size: 15px;
+    color: var(--text-main);
+    line-height: 1.8;
+    margin: 0;
+}
+
+.detail-pairing {
+    padding: 16px 18px;
+    border-radius: 14px;
+    background: #F9FAFB;
+    margin-bottom: 10px;
+}
+
+.detail-pairing-combo {
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 4px;
+    color: var(--text-main);
+}
+
+.detail-pairing-effect {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.6;
+}
+
+.detail-warn {
+    background: #FEF2F2;
+    border-radius: 18px;
+    padding: 24px;
+}
+
+.detail-warn h4 { color: #B91C1C; }
+.detail-warn h4::before { background: #B91C1C; }
+.detail-warn p { color: #991B1B; font-size: 14px; }
+
+.detail-note {
+    border-left: 3px solid var(--border-color);
+    padding-left: 20px;
+}
+.detail-note p { color: var(--text-muted); font-size: 14px; font-style: italic; }
+
+/* --- 信号整理页 --- */
+.symptom-layout {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.stepper {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 48px;
+    position: relative;
+}
+
+.stepper::after {
+    content: '';
+    position: absolute;
+    top: 16px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #E5E7EB;
+    z-index: 0;
+}
+
+.step {
+    background: var(--bg-page);
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 0 20px;
+}
+
+.step-circle {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #E5E7EB;
+    color: #9CA3AF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 14px;
+}
+
+.step.active .step-circle { background: var(--primary-green); color: white; }
+.step.active .step-label { color: var(--primary-green); font-weight: 700; }
+.step-label { font-size: 12px; color: var(--text-muted); }
+
+.symptom-card {
+    background: var(--card-white);
+    border-radius: 28px;
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-soft);
+    padding: 56px;
+    margin-bottom: 80px;
+}
+
+/* 自定义 Checkbox */
+.custom-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 24px;
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.custom-checkbox:hover { background: var(--light-green-bg); border-color: var(--primary-green); }
+
+.checkbox-box {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border-color);
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+input:checked + .checkbox-box {
+    background: var(--primary-green);
+    border-color: var(--primary-green);
+}
+
+/* 报告卡片 */
+.report-card {
+    border-top: 4px solid var(--primary-green);
+}
+
+.report-section {
+    margin-bottom: 32px;
+}
+
+.report-section h5 {
+    font-size: 16px;
+    color: var(--deep-green);
+    margin: 0 0 12px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.report-section h5::before {
+    content: '';
+    width: 4px;
+    height: 16px;
+    background: var(--primary-green);
+    border-radius: 2px;
+}
+
+.report-content {
+    background: #F9FAFB;
+    padding: 20px;
+    border-radius: 12px;
+    font-size: 14px;
+    color: var(--text-main);
+    line-height: 1.7;
+}
+
+/* 版本号徽标 */
+.version-badge {
+    position: fixed;
+    bottom: 12px;
+    right: 14px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    background: rgba(255, 253, 248, 0.75);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 3px 9px;
+    z-index: 2000;
+    user-select: none;
+    backdrop-filter: blur(4px);
+    font-family: 'Inter', 'PingFang SC', sans-serif;
+}
+
+/* 响应式 */
+@media (max-width: 1280px) {
+    .cabinet-wrapper { width: 420px !important; height: 400px !important; }
+}
+@media (max-width: 1100px) {
+    .cabinet-wrapper { width: 380px !important; height: 370px !important; }
+    /* 屏幕变窄时卡片改为静态堆叠，避免溢出 */
+    .daily-herb-card, #daily-card {
+        position: static !important;
+        top: auto !important;
+        right: auto !important;
+        left: auto !important;
+        transform: none !important;
+        width: min(300px, 85vw) !important;
+        margin: 0 auto;
+    }
+    .daily-herb-card.visible, #daily-card.visible { transform: none !important; }
+    .daily-herb-card:not(.visible) { display: none; }
+}
+@media (max-width: 1024px) {
+    .herb-grid,
+    .herb-group-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+    .hero-layout { flex-direction: column; height: auto; padding: 40px 20px; }
+    .hero-left, .hero-right { width: 100% !important; padding: 0; }
+    .hero-right { justify-content: center !important; flex-direction: column !important; gap: 24px; }
+    .cabinet-wrapper { width: min(440px, 92vw) !important; height: auto !important; }
+    .medicine-cabinet { width: 100% !important; height: auto !important; aspect-ratio: 520 / 480; }
+    /* 移动端：卡片与占位改为静态居中堆叠，避免悬浮定位溢出屏幕 */
+    .daily-herb-card, #daily-card, .daily-placeholder {
+        position: static !important;
+        top: auto !important;
+        right: auto !important;
+        left: auto !important;
+        transform: none !important;
+        width: min(320px, 88vw) !important;
+        max-width: 88vw;
+        margin: 0 auto;
+    }
+    .daily-herb-card.visible, #daily-card.visible { transform: none !important; }
+    .daily-herb-card:not(.visible) { display: none; }
+}
+@media (max-width: 768px) {
+    .herb-grid,
+    .herb-group-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .detail-layout { padding: 0 4px; }
+    .detail-aside { padding: 28px 24px; border-radius: 20px; }
+    .detail-title { font-size: 36px; }
+    .detail-summary { font-size: 14px; }
+    .detail-main { padding-bottom: 48px; }
+    .detail-block { margin-bottom: 28px; padding-bottom: 24px; }
+    .detail-warn { padding: 20px; }
+    .detail-back { min-height: 44px; }
+    .filter-tags {
+        justify-content: flex-start;
+        overflow-x: auto;
+        padding-bottom: 4px;
+    }
+    .filter-tag { flex-shrink: 0; }
+    .suggestion-meta {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    /* 详情页：移动端单栏堆叠 */
+    .detail-layout { grid-template-columns: 1fr; gap: 32px; }
+    .detail-aside { position: static; top: auto; }
+    .detail-back { top: 80px; left: 20px; }
+    #detail-section { padding-top: 100px; }
+}
+@media (max-width: 480px) {
+    .herb-grid,
+    .herb-group-grid { grid-template-columns: 1fr; }
+    .search-empty-actions { flex-direction: column; }
+    .search-empty-actions button { width: 100%; }
+}

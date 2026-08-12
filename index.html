@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>草本知行 - 草本智慧，触手可及</title>
+    <!-- 引入基础样式和自定义高级样式 -->
+    <link rel="stylesheet" href="tailwind_offline.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- 顶部导航栏 -->
+    <header class="navbar">
+        <div class="nav-container">
+            <div class="logo" onclick="showHome()" style="cursor:pointer">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/></svg>
+                <span>草本知行</span>
+            </div>
+            <nav class="nav-links">
+                <a href="javascript:void(0)" id="nav-home" class="nav-item active" onclick="showHome()">首页</a>
+                <a href="javascript:void(0)" id="nav-search" class="nav-item" onclick="showHerbSearch()">草本查询</a>
+                <a href="javascript:void(0)" id="nav-symptom" class="nav-item" onclick="showSymptomPage()">身体信号整理</a>
+            </nav>
+        </div>
+    </header>
+
+    <!-- 首页区域 -->
+    <section id="home-section" class="hero-layout">
+        <div class="hero-left">
+            <h1 class="main-title">草本智慧<br>触手可及</h1>
+            <p class="sub-title">查询中药知识，整理身体表现，轻松理解中医调理思路。</p>
+            
+            <div class="search-panel-home">
+                <div class="search-container home-search-container">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6F7A70" stroke-width="2" style="margin-right:12px"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                    <input type="text" id="home-search-input" class="search-input" placeholder="搜索药名、功效或身体表现..." autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="home-suggestions" aria-expanded="false">
+                    <button class="search-button" onclick="executeHomeSearch()">立即查询</button>
+                    <div id="home-suggestions" class="search-suggestions" role="listbox" aria-label="首页搜索建议" hidden></div>
+                </div>
+            </div>
+
+            <div class="tag-container">
+                <span class="tag-pill" onclick="quickSearch('去火')">去火</span>
+                <span class="tag-pill" onclick="quickSearch('补气')">补气</span>
+                <span class="tag-pill" onclick="quickSearch('安神')">安神</span>
+                <span class="tag-pill" onclick="quickSearch('黄芪')">黄芪</span>
+                <span class="tag-pill" onclick="quickSearch('枸杞')">枸杞</span>
+                <span class="tag-pill" onclick="quickSearch('金银花')">金银花</span>
+            </div>
+
+            <div class="entry-container">
+                <div class="entry-card" onclick="showHerbSearch()">
+                    <h3>草本知识查询</h3>
+                    <p>查药名、功效、性味归经</p>
+                </div>
+                <div class="entry-card" onclick="showSymptomPage()">
+                    <h3>身体信号整理</h3>
+                    <p>整理表现，生成沟通报告</p>
+                </div>
+            </div>
+
+            </div>
+
+        <div class="hero-right">
+            <div class="cabinet-wrapper">
+                <div class="medicine-cabinet">
+                    <!-- 抽屉网格 -->
+                    <div class="cabinet-grid" id="cabinet-grid">
+                        <!-- JS 渲染 16 个抽屉 -->
+                    </div>
+                    <!-- 实体 3D 侧板与顶板（显式 DOM，避免伪元素被裁剪/不触发 3D） -->
+                    <div class="cabinet-side-panel"></div>
+                    <div class="cabinet-top-panel"></div>
+                </div>
+                <!-- 今日一学卡片（锚定 cabinet-wrapper，悬浮于药柜右侧，完整卡片外观） -->
+                <div id="daily-card" class="daily-herb-card">
+                    <h4>今日一学</h4>
+                    <h2 id="daily-name">金银花</h2>
+                    <p id="daily-desc">关键词：清热解毒、疏散风热<br>常用于了解热象明显、咽喉不适等方向的中药知识。</p>
+                    <button class="search-button" style="width:100%; height:44px; font-size:14px" onclick="openDrawerDetail()">查看详情</button>
+                </div>
+                <!-- 药柜下方单行引导文字：取代原占位卡片，常驻显示 -->
+                <div class="cabinet-bottom-hint">点击药柜抽屉，查看对应中药知识</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 草本查询页 -->
+    <section id="search-section" class="page-container" style="display:none">
+        <div class="page-header">
+            <h1>草本知识查询</h1>
+            <p>输入药名、功效或日常表达，快速了解相关中药知识。</p>
+            <p id="search-status" class="search-status" aria-live="polite">正在展示全部草本知识</p>
+        </div>
+
+        <div class="search-panel">
+            <div class="search-container library-search-container" style="margin-bottom:0">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6F7A70" stroke-width="2" style="margin-right:12px"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <input type="text" id="lib-search-input" class="search-input" placeholder="搜索中药、功效或通俗表达..." autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="herb-suggestions" aria-expanded="false">
+                <div id="herb-suggestions" class="search-suggestions" role="listbox" aria-label="草本查询建议" hidden></div>
+            </div>
+            <div class="filter-tags" id="lib-filters">
+                <!-- JS 渲染 -->
+            </div>
+        </div>
+
+        <div class="herb-grid" id="herb-grid">
+            <!-- JS 渲染 4 列网格 -->
+        </div>
+    </section>
+
+    <!-- 身体信号整理页 -->
+    <section id="symptom-section" class="page-container symptom-layout" style="display:none">
+        <div class="page-header">
+            <h1>身体信号整理</h1>
+            <p>通过整理模糊的表现，生成清晰的沟通报告，辅助您与医生沟通。</p>
+        </div>
+
+        <div class="stepper">
+            <div class="step active" id="step-1-label">
+                <div class="step-circle">1</div>
+                <span class="step-label">安全提醒</span>
+            </div>
+            <div class="step" id="step-2-label">
+                <div class="step-circle">2</div>
+                <span class="step-label">输入描述</span>
+            </div>
+            <div class="step" id="step-3-label">
+                <div class="step-circle">3</div>
+                <span class="step-label">细节追问</span>
+            </div>
+            <div class="step" id="step-4-label">
+                <div class="step-circle">4</div>
+                <span class="step-label">生成报告</span>
+            </div>
+        </div>
+
+        <div class="symptom-card" id="symptom-step-container">
+            <!-- JS 动态切换内容 -->
+        </div>
+    </section>
+
+    <!-- 药材详情页（全屏，方案 B：替代原右侧抽屉） -->
+    <section id="detail-section" class="page-container" style="display:none">
+        <button id="detail-back" class="detail-back" type="button" onclick="goBackFromDetail()">← 返回查询</button>
+        <div id="detail-content"></div>
+    </section>
+
+    <script src="data.js"></script>
+    <script src="script.js"></script>
+
+    <!-- 版本号徽标（每次改动 +1，方便识别当前版本） -->
+    <div class="version-badge" id="version-badge" title="当前页面版本">v1.39</div>
+    <!-- 页脚免责声明：底部水平居中 -->
+    <p class="disclaimer">本产品仅供中医药知识学习与症状整理参考，不构成医疗诊断或处方建议。</p>
+</body>
+</html>

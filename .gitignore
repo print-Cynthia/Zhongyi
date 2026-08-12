@@ -1,0 +1,4 @@
+.workbuddy/
+_backup*/
+node_modules/
+*.tmp
