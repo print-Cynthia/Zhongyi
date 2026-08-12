@@ -18,7 +18,7 @@
 ```
 
 ## 稳定层 vs 可换层
-- **稳定层（跨项目原样复用）**：`org.md`、`roles/`（主管 + 6 部门 + 6 PM）、`acceptance/`、`style-guide.md`。
+- **稳定层（跨项目原样复用）**：`org.md`、`roles/`（主管 + 6 部门 + 6 PM）、`acceptance/`、`contracts/`（3 份接口契约）、`style-guide.md`。
 - **可换层（迁移时替换）**：
   - `staff/` —— 每个部门下属的具体 AI 员工（不同项目一线人员不同，只改这里）。
   - `domain/` —— 领域组（中医 → 健身 → 法律，整层换掉）。
@@ -37,6 +37,12 @@
 | `domain/compliance-rules.md` | 免责声明 + 红线词 + 脱敏规则 | 领域 |
 | `acceptance/auto-checklist.md` | 质量组自动预检项 | 稳定 |
 | `acceptance/human-review.md` | 用户人工终审签字项 | 稳定 |
+| `contracts/skill-interface.md` | 契约1：5 Skill + Safety Shield + Session 统一接口（可插拔接缝） | 稳定 |
+| `contracts/state-machine.md` | 契约2：4 阶段/7 态状态机、收敛分路由、红线切断、降级 | 稳定 |
+| `contracts/mock-driver.md` | 契约3：LocalMockDriver 行为规范（零成本跑通全链路） | 稳定 |
+
+## 契约层（解耦接缝，稳定层）
+`contracts/` 是「业务逻辑 / 驱动解耦」的核心：3 份契约定义了 5-Skill 流水线、状态机、本地 Mock 驱动的**接口与规范（接缝）**。业务代码只依赖这些契约，未来从 `LocalMockDriver` 切到 `CloudAPIDriver` 时**前端与业务零改动**。阶段 2 起的代码替换以 `contracts/` 为唯一权威，质量组据其写自动预检。
 
 ## 角色索引
 - 主管：[roles/master.md](roles/master.md)
