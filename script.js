@@ -939,6 +939,25 @@ function renderS5HTML(data) {
             </div>
 
             <div class="report-section">
+                <h5>辨证倾向结论（5D 加权推理矩阵）</h5>
+                <div class="report-content">
+                    ${sec.bias_conclusion_section ? `
+                    <p style="margin-bottom:10px">
+                        <b>归经方向：</b>${sec.bias_conclusion_section.category_name}
+                        ｜ <b>推荐典籍方剂：</b>${sec.bias_conclusion_section.formula_name}（${sec.bias_conclusion_section.source_book}）
+                        ${sec.bias_conclusion_section.low_confidence ? ' <span class="toxic-tag">倾向性较弱</span>' : ''}
+                    </p>
+                    <p style="margin-bottom:10px; color:var(--text-muted); font-size:13px">
+                        加权推理得分 Score = ${sec.bias_conclusion_section.score}
+                        ${sec.bias_conclusion_section.matched_zhuan_tags && sec.bias_conclusion_section.matched_zhuan_tags.length ? ' ｜ 命中专病：' + sec.bias_conclusion_section.matched_zhuan_tags.join('、') : ''}
+                        ${sec.bias_conclusion_section.matched_shiwen_tags && sec.bias_conclusion_section.matched_shiwen_tags.length ? ' ｜ 命中十问：' + sec.bias_conclusion_section.matched_shiwen_tags.join('、') : ''}
+                    </p>
+                    <p>${sec.bias_conclusion_section.conclusion_text || ''}</p>
+                    ` : '<p>已完成辨证推理，详见上方脏腑方向与参考方剂。</p>'}
+                </div>
+            </div>
+
+            <div class="report-section">
                 <h5>面诊沟通话术</h5>
                 <div class="report-content">${sec.doctor_communication_brief || ''}
                     <div style="margin-top:12px"><button class="search-button" style="padding:0 24px; font-size:13px" onclick="copyDoctorBrief()">复制话术给医生</button></div>

@@ -31,17 +31,19 @@ function runFlow(desc, answers) {
     return { session: s, safety: false };
 }
 
-console.log('\n=== 契约用例 1：急症红牌硬拦截（含自然语言扩展） ===');
+console.log('\n=== 契约用例 1：Safety Shield 红牌词库（CPO 删减指令：清空后不再拦截） ===');
 {
-    ['胸痛剧烈', '胸好痛', '心口痛', '胸闷得慌', '吐血', '呼吸困难'].forEach(t => {
+    check('RED_FLAGS 已按 CPO 指令清空（inert）', E.RED_FLAGS.length === 0, 'len=' + E.RED_FLAGS.length);
+    // 原敏感词（胸好痛/心口痛/吐血/呼吸困难 等）清空后不再一票否决，走正常归纳路径
+    ['胸好痛', '心口痛', '胸闷得慌', '吐血', '呼吸困难', '胸痛剧烈'].forEach(t => {
         const s = new SymptomSession(getDriver('mock'));
         const r = s.submitDescription(t);
-        check('红线「' + t + '」→ SAFETY_CUTOFF', r.state === 'SAFETY_CUTOFF' && r.data.compliance_card);
+        check('「' + t + '」不再触发 SAFETY_CUTOFF（进入 S2 正常问诊）', r.state === 'S2' && !r.data.compliance_card);
     });
-    // 轻度胸闷不应触发红线，仍走归纳路径
-    const s = new SymptomSession(getDriver('mock'));
-    const r = s.submitDescription('最近有点胸闷、气短');
-    check('轻度「胸闷」不触发红线（走 S2 归纳）', r.state === 'S2');
+    // 红线函数与接线仍保留（结构未删），仅词表为空
+    const drv = new LocalMockDriver();
+    const sh = drv.invoke('safety_shield', { red_list: E.RED_FLAGS }, { user_raw_input: '胸好痛' });
+    check('Safety Shield 函数仍存在且对空词表返回不拦截', sh.ok === true && sh.data.blocked === false);
 }
 
 console.log('\n=== 契约用例 2：模糊 / 空输入健壮性 ===');
@@ -72,7 +74,7 @@ console.log('\n=== 契约用例 3：Max Rounds = 5 硬停 ===');
 
 console.log('\n=== 契约用例 4：毒性静态预警（半夏） ===');
 {
-    const { session } = runFlow('我胸口闷、气短、怕冷', [['闷痛 / 胀痛，像有东西压着'], ['怕冷、喜暖、得热则舒'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const { session } = runFlow('我胸口闷、气短、怕冷', [['闷痛 / 胀痛，像有东西压着'], ['受凉 / 受风后诱发'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
     const rep = session.confirm();
     const herbs = rep.data.ui_card_payload.sections.herb_knowledge_section;
     const toxic = herbs.find(h => h.herb_name === '半夏');
@@ -82,7 +84,7 @@ console.log('\n=== 契约用例 4：毒性静态预警（半夏） ===');
 
 console.log('\n=== 契约用例 5：离线 / 无 API 仍产出报告 ===');
 {
-    const { session } = runFlow('我容易胁肋胀闷、情绪急躁', [['胀闷走窜、叹气则舒'], ['容易急躁、一点就着'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const { session } = runFlow('我容易胁肋胀闷、情绪急躁', [['胀闷走窜、叹气则舒'], ['遇怒加重'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
     const rep = session.confirm();
     check('确认后产出 S5 报告', session.state === 'S5' && rep.data.ui_card_payload.sections);
     check('报告含免责声明', /不构成医疗诊断/.test(rep.data.ui_card_payload.sections.disclaimer || ''));
@@ -124,7 +126,7 @@ console.log('\n=== 整改用例 8：双轨多组多选 + 强制兜底 ===');
 
 console.log('\n=== 整改用例 9：Skill3 自然语言叙述（非逗号拼接） ===');
 {
-    const { session } = runFlow('我胸口闷、气短、怕冷', [['闷痛 / 胀痛，像有东西压着'], ['怕冷、喜暖、得热则舒'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const { session } = runFlow('我胸口闷、气短、怕冷', [['闷痛 / 胀痛，像有东西压着'], ['受凉 / 受风后诱发'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
     const p = session.confirmation.ui_card_payload;
     check('S3 含大段叙述 synthesized_symptom_text', typeof p.synthesized_symptom_text === 'string' && p.synthesized_symptom_text.length > 20);
     check('叙述含「您最初描述」深整理感语句', /您最初描述|进一步问诊|综合来看/.test(p.synthesized_symptom_text));
@@ -133,7 +135,7 @@ console.log('\n=== 整改用例 9：Skill3 自然语言叙述（非逗号拼接�
 
 console.log('\n=== 整改用例 10：Skill5 深度报告（病机译释 + 第一人称话术 + 组成联动） ===');
 {
-    const { session } = runFlow('我胸口闷、气短、怕冷', [['闷痛 / 胀痛，像有东西压着'], ['怕冷、喜暖、得热则舒'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const { session } = runFlow('我胸口闷、气短、怕冷', [['闷痛 / 胀痛，像有东西压着'], ['受凉 / 受风后诱发'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
     const rep = session.confirm();
     const sec = rep.data.ui_card_payload.sections;
     const fm = sec.matched_formula_section;
@@ -148,13 +150,16 @@ console.log('\n=== 整改用例 10：Skill5 深度报告（病机译释 + 第一
     check('联动 herb_id 均能在草本知识卡映射', linked.every(c => herbIds.indexOf(c.herb_id) >= 0));
 }
 
-console.log('\n=== 整改用例 11：无匹配信息 → 通用兜底（非干拔脾胃虚弱） ===');
+console.log('\n=== 整改用例 11：无有效 Tag → 仍产出 Top1 倾向性结论（严禁「信息待补」） ===');
 {
     const { session } = runFlow('我最近不太舒服、有点累', [[FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
     const rep = session.confirm();
-    const fm = rep.data.ui_card_payload.sections.matched_formula_section;
-    check('无类目匹配 → 通用辨证兜底', /信息待补|辨证调理/.test(fm.formula_name), 'fm=' + fm.formula_name);
-    check('通用兜底不谎称「脾胃虚弱/四君子汤」', !/脾胃虚弱|四君子汤/.test(fm.formula_name));
+    const sec = rep.data.ui_card_payload.sections;
+    const fm = sec.matched_formula_section;
+    check('5D 矩阵始终产出 Top1 方剂（不再「信息待补」）', !/信息待补/.test(fm.formula_name), 'fm=' + fm.formula_name);
+    check('始终返回辨证倾向结论 bias_conclusion', !!sec.bias_conclusion_section);
+    check('无有效 Tag 时标记 low_confidence（倾向性较弱）', sec.bias_conclusion_section && sec.bias_conclusion_section.low_confidence === true);
+    check('不谎称「脾胃虚弱/四君子汤」', !/脾胃虚弱|四君子汤/.test(fm.formula_name));
 }
 
 console.log('\n=== 整改用例 12：backToEdit 回显上一轮文字 ===');
@@ -173,6 +178,30 @@ console.log('\n=== 整改用例 13：RAG 一致性（composition 必填字段齐
         if (!Array.isArray(f.composition) || !f.tcm_explanation || !f.doctor_brief_template) { okAll = false; bad = c.name + '/' + f.formula_name; }
     }));
     check('所有方剂均含 composition / tcm_explanation / doctor_brief_template', okAll, bad);
+}
+
+console.log('\n=== 整改用例 14：5D 加权矩阵评分（专病+十问 → Top1，相克扣分） ===');
+{
+    // 心肺：刺痛固定 + 情志波动 → 丹参饮（25×2=50），且瓜蒌薤白因相克被压低
+    const { session: s1 } = runFlow('我胸口刺痛、位置固定', [['刺痛，位置固定不移'], ['情绪激动 / 紧张诱发'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const r1 = s1.confirm();
+    const bc1 = r1.data.ui_card_payload.sections.bias_conclusion_section;
+    check('心肺·刺痛固定+情志 → Top1=丹参饮', bc1.formula_name === '丹参饮', 'fm=' + bc1.formula_name);
+    check('丹参饮 Score=50（专病 25×2）', bc1.score === 50, 'score=' + bc1.score);
+    check('命中专病 Tag 含「刺痛，位置固定不移」', (bc1.matched_zhuan_tags || []).indexOf('刺痛，位置固定不移') >= 0);
+
+    // 脾胃：食后腹胀 + 食欲不振 + 稀溏 → 参苓白术散（25×3=75）
+    const { session: s2 } = runFlow('我胃胀、吃不下、大便稀', [['食后腹胀不消化'], ['食欲不振、吃得很少'], ['稀溏 / 腹泻'], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const r2 = s2.confirm();
+    const bc2 = r2.data.ui_card_payload.sections.bias_conclusion_section;
+    check('脾胃·腹胀+纳差+便溏 → Top1=参苓白术散', bc2.formula_name === '参苓白术散', 'fm=' + bc2.formula_name);
+    check('参苓白术散 Score=75（专病 25×3）', bc2.score === 75, 'score=' + bc2.score);
+
+    // 相克验证：肝胆用户选「胀痛连及胸乳+遇怒加重」（均肝实）应得柴胡疏肝散，而非逍遥散
+    const { session: s3 } = runFlow('我两胁胀痛、遇怒加重', [['遇怒加重'], ['胀痛连及胸乳'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const r3 = s3.confirm();
+    const bc3 = r3.data.ui_card_payload.sections.bias_conclusion_section;
+    check('肝胆·胀痛连胸乳+遇怒 → Top1=柴胡疏肝散', bc3.formula_name === '柴胡疏肝散', 'fm=' + bc3.formula_name);
 }
 
 console.log('\n============================================');

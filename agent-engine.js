@@ -1,10 +1,15 @@
 /**
- * agent-engine.js — 身体信号整理 · 可插拔本地引擎（LocalMockDriver） v2
+ * agent-engine.js — 身体信号整理 · 可插拔本地引擎（LocalMockDriver） v2.1
  *
  * 本文件实现《契约 1/2/3》（agents/contracts/）规定的：
  *   - 5 Skill + Safety Shield 的本地规则驱动（零 API / 零成本 / 强 Schema 合规）
  *   - 状态机 S0~S6 的编排（Min Rounds=2 硬下限 / Max Rounds=5 硬停 / 红线切断 / 降级）
  *   - getDriver('mock'|'cloud') 可插拔接缝：未来切 CloudAPIDriver 业务代码零改动
+ *
+ * 5D 推理矩阵（CPO 终极指令 v1.43 注入）：
+ *   - 双轨追问：轨1 主诉专病细化（depth_prompts）→ 完备度<0.85 平滑进入轨2《十问篇》(global_inquiry)
+ *   - 加权矩阵：Score = Σ专病Tag×25 + Σ十问Tag×15 − Σ相克Tag×20，遍历全部方剂取 Top1 与脏腑方向
+ *   - 永远产出倾向性结论（严禁「信息待补」），score<25 标记 low_confidence
  *
  * 语料库：统一读取 database/herbs_rag_db.js（PRD §3.3 三大层级：
  *   Layer1 体征标准化规范表、Layer2 问诊推导逻辑表《十问篇》、Layer3 结构化归纳与草本映射表）。
@@ -18,17 +23,24 @@
     'use strict';
 
     /* ============================ 0. 红线 / 红牌 / 配置 ============================ */
-    // 急症红牌词（compliance-rules.md §2 + 阶段 3 自然语言扩展）：
-    // 急性/重症方向——含口语化急症表达（胸好痛 / 心口痛 / 胸口痛 / 胸闷得慌 等），命中一票否决弹 RED 合规卡。
-    // 注意：轻度「胸闷 / 胸胁胀痛」不在列，仍走正常心肺胸胁归纳路径。
-    const RED_FLAGS = ['胸痛剧烈', '胸痛', '胸好痛', '心口痛', '胸口痛', '心口疼', '胸口疼', '胸疼', '胸闷得慌',
-        '吐血', '呼吸困难', '剧烈头痛', '头痛伴呕吐', '昏迷', '大出血', '严重外伤', '急性中毒', '休克'];
+    // 急症红牌词（compliance-rules.md §2）：CPO 安全规则调优指令——原词库（胸痛剧烈 / 胸痛 / 胸好痛 /
+    // 心口痛 / 胸口痛 / 胸疼 / 胸闷得慌 / 吐血 / 呼吸困难 / 剧烈头痛 / 头痛伴呕吐 / 昏迷 / 大出血 /
+    // 严重外伤 / 急性中毒 / 休克 共 18 条）对正常问诊体验过于敏感（如“胸好痛”被直接拦截），
+    // 经 CPO “全部去掉” 删减指令后此处清空：Safety Shield 函数与接线保留（red_list=[]），仅不再拦截，
+    // 后续若需恢复重症拦截，直接回填词表即可，业务代码零改动。
+    // 注：红线二次校验词 FORBIDDEN_WORDS（确诊/开方/处方/剂量/治愈/包好/保证有效）仍保留，仅做检索标注，不参与拦截。
+    const RED_FLAGS = [];
     // 红线词（compliance-rules.md §3，用于检索时二次校验，本驱动仅记录）
     const FORBIDDEN_WORDS = ['确诊', '开方', '处方', '剂量', '治愈', '包好', '保证有效'];
 
     const MAX_ROUNDS = 5;
     const MIN_ROUNDS = 2;            // 收敛硬下限：至少追问 2 轮，杜绝「1 轮假收敛」
     const CONVERGENCE_PASS = 0.85;   // 收敛分展示阈值（仅展示，主约束为轮次）
+    // 5D 推理矩阵 · 加权评分权重（CPO 终极指令）：Score = Σ专病Tag×25 + Σ十问Tag×15 − Σ相克Tag×20
+    const W_ZHUAN = 25;     // 专病 Tag（来自本类目 depth_prompts）
+    const W_SHIWEN = 15;    // 十问 Tag（来自 global_inquiry）
+    const W_INCOMPAT = 20;  // 相克 Tag（与本病机相左）
+    const COMPLETENESS_GATE = 0.85; // 专病追问后完备度阈值，低于此值才进入《十问篇》基础盘查
     // 通用兜底选项（强制追加到每个追问卡片，绝不强迫硬选）
     const FALLBACK_LABEL = '以上均无 / 无上述情况';
 
@@ -72,6 +84,27 @@
         Object.keys(cab).forEach(n => { if (!map[n]) map[n] = cab[n]; });
         return map;
     }
+    // 构建 Tag 双向映射（tag ↔ 人类 label），覆盖全部 depth_prompts / global_inquiry 选项
+    function buildTagMaps(rag) {
+        const tagToLabel = {}, labelToTag = {};
+        const absorb = (opts) => (opts || []).forEach(o => {
+            if (o && typeof o === 'object' && o.tag) { tagToLabel[o.tag] = o.label || o.tag; labelToTag[o.label || o.tag] = o.tag; }
+        });
+        (rag.categories || []).forEach(c => { Object.keys(c.depth_prompts || {}).forEach(k => absorb(c.depth_prompts[k].options)); });
+        Object.keys(rag.global_inquiry || {}).forEach(k => absorb(rag.global_inquiry[k].options));
+        return { tagToLabel: tagToLabel, labelToTag: labelToTag };
+    }
+    // 归一化入参：UI 回传 tag，QA/旧链路可能回传 label，统一成 tag（兜底项保留 FALLBACK_LABEL）
+    function normalizeTags(raw, maps) {
+        return (raw || []).map(t => {
+            if (t === FALLBACK_LABEL) return FALLBACK_LABEL;
+            if (maps.tagToLabel[t]) return t;            // 已是 tag
+            if (maps.labelToTag[t]) return maps.labelToTag[t]; // 是 label → 转 tag
+            return t;                                    // 未知值原样保留
+        });
+    }
+    // tag → 人类可读 label（供叙述 / 结论回显）
+    function tagLabel(tag, maps) { return (maps && maps.tagToLabel[tag]) || tag; }
 
     function buildCtx(driver) {
         return {
@@ -80,6 +113,7 @@
             max_rounds: MAX_ROUNDS,
             driver: 'mock',
             knowledge_base: getRag(),
+            tag_maps: buildTagMaps(getRag()),
             red_list: RED_FLAGS,
             forbidden_words: FORBIDDEN_WORDS
         };
@@ -132,7 +166,7 @@
         };
     }
 
-    // 构建双轨多组追问队列：轨1 主诉深度细化（类目 depth_prompts）→ 轨2 《十问篇》基础盘查（global_inquiry 未覆盖维度）→ 补位
+    // 构建双轨多组追问队列：轨1 主诉深度细化（类目 depth_prompts）→ 轨2 《十问篇》基础盘查（完备度<0.85 时进入）→ 补位
     function buildClarifyQueue(ext, rag) {
         const queue = [];
         const cat = (rag.categories || []).find(c => c.id === ext.detected_category) || null;
@@ -142,16 +176,22 @@
                 queue.push({ track: 'T1', key: k, dim: dp.dimension, question: dp.question, options: dp.options });
             });
         }
-        // 轨2：仅盘查初始未覆盖的基础维度（避免与轨1重复）
+        // 计算专病追问后的临时完备度（已覆盖维度 ∪ T1 维度）/ 全维度
+        const allDims = collectAllDims(rag);
         const coveredNow = new Set(ext.covered_dimensions || []);
-        const gOrder = ['寒热', '二便', '睡眠', '饮食'];
-        gOrder.forEach(gk => {
-            const gi = (rag.global_inquiry || {})[gk];
-            if (gi && gi.dimension && !coveredNow.has(gi.dimension)) {
-                queue.push({ track: 'T2', key: gk, dim: gi.dimension, question: gi.question, options: gi.options });
-                coveredNow.add(gi.dimension);
-            }
-        });
+        queue.forEach(q => { if (q.dim) coveredNow.add(q.dim); });
+        const completeness = allDims.length ? coveredNow.size / allDims.length : 1;
+        // 轨2：仅当完备度仍低于阈值时，平滑进入《十问篇》基础盘查（盘查初始未覆盖维度，避免与轨1重复）
+        if (completeness < COMPLETENESS_GATE) {
+            const gOrder = ['寒热', '二便', '睡眠', '饮食'];
+            gOrder.forEach(gk => {
+                const gi = (rag.global_inquiry || {})[gk];
+                if (gi && gi.dimension && !coveredNow.has(gi.dimension)) {
+                    queue.push({ track: 'T2', key: gk, dim: gi.dimension, question: gi.question, options: gi.options });
+                    coveredNow.add(gi.dimension);
+                }
+            });
+        }
         // 补位：确保达到 Min Rounds（通用的「其他补充」多维盘查）
         const generic = { track: 'T3', key: 'generic', dim: 'other', question: '是否还有其他想补充的身体表现？（可多选）', options: ['乏力、神疲', '怕热、上火', '睡眠差、多梦', '情绪易波动'] };
         while (queue.length < MIN_ROUNDS) queue.push(generic);
@@ -172,9 +212,11 @@
         if (!current) {
             return { should_continue: false, ask_dimension: null, ask_track: null, ask_key: null, question_text: '', option_cards: [], convergence_score: Number(score.toFixed(2)) };
         }
-        // 每个选项独立成 tag（以 label 为 tag，便于叙述回显）；强制追加兜底（负向）
-        const option_cards = current.options.map(o => ({ label: o, tag: o, negative: false }))
-            .concat([{ label: FALLBACK_LABEL, tag: FALLBACK_LABEL, negative: true }]);
+        // 每个选项独立成 tag：兼容 {label,tag} 对象与纯字符串；强制追加兜底（负向）
+        const option_cards = (current.options || []).map(o => {
+            if (o && typeof o === 'object') return { label: o.label || o.tag, tag: o.tag || o.label, negative: false };
+            return { label: o, tag: o, negative: false };
+        }).concat([{ label: FALLBACK_LABEL, tag: FALLBACK_LABEL, negative: true }]);
         return {
             should_continue: shouldContinue,
             ask_dimension: current.dim,
@@ -198,7 +240,7 @@
         answered.forEach(a => {
             const tags = a.tags || [];
             const hasNeg = tags.some(isNegativeLabel);
-            tags.forEach(t => { if (!isNegativeLabel(t)) posSelections.push(t); });
+            tags.forEach(t => { if (!isNegativeLabel(t)) posSelections.push(tagLabel(t, ctx.tag_maps)); });
             if (hasNeg) negDims.push(DIM_EXCLUDE_LABEL[a.dim] || '相关方面');
         });
         const primary = extracted.length ? extracted[0].standard : (posSelections[0] || '相关身体表现');
@@ -238,23 +280,47 @@
         };
     }
 
-    // Skill 4 · Retriever（RAG 精确匹配：类目 → 主方；composition 组成药材 → 草本知识卡 ID 级强联动）
+    // Skill 4 · Retriever（5D 加权矩阵：遍历全部方剂 → Top1 倾向性结论，绝不「信息待补」）
     function skillRetriever(ctx, input) {
         const rag = getRag();
         const kb = getKB();
-        const cat = (rag.categories || []).find(c => c.id === input.category_id) || null;
-        const nameToId = buildNameToId(cat, kb);
-        let formula = null;
-        if (cat) formula = (cat.formulas || []).find(f => f.id === cat.primary_formula_id) || cat.formulas[0] || null;
+        const maps = ctx.tag_maps || buildTagMaps(rag);
+        const selected = (input.selected_tags || []).filter(t => t !== FALLBACK_LABEL);
+        const selectedSet = new Set(selected);
+        const detectedCat = input.category_id || null;
 
-        if (!formula) {
-            // 通用兜底：信息不足以精准匹配典籍方剂（非「脾胃虚弱 / 四君子汤」干拔降级）
+        // —— 5D 加权矩阵：Score = Σ专病Tag×25 + Σ十问Tag×15 − Σ相克Tag×20 ——
+        let best = null;
+        (rag.categories || []).forEach(cat => {
+            (cat.formulas || []).forEach(f => {
+                const zhuan = (f.zhuan_tags || []).filter(t => selectedSet.has(t));
+                const shiwen = (f.shiwen_tags || []).filter(t => selectedSet.has(t));
+                const incompat = (f.incompatible_tags || []).filter(t => selectedSet.has(t));
+                const score = zhuan.length * W_ZHUAN + shiwen.length * W_SHIWEN - incompat.length * W_INCOMPAT;
+                const cand = {
+                    cat: cat, formula: f, score: score,
+                    zhuan: zhuan, shiwen: shiwen, incompat: incompat,
+                    inDetected: (cat.id === detectedCat),
+                    primary: (cat.primary_formula_id === f.id)
+                };
+                if (!best) { best = cand; return; }
+                // 排序：score 降序；同分 → 脏腑亲和（detected）优先 → primary_formula 优先 → 先入
+                if (cand.score > best.score) { best = cand; return; }
+                if (cand.score === best.score) {
+                    if (cand.inDetected && !best.inDetected) { best = cand; return; }
+                    if (cand.inDetected === best.inDetected && cand.primary && !best.primary) { best = cand; return; }
+                }
+            });
+        });
+
+        // 极端兜底：语料库无任何方剂（理论不会出现）→ 中性通用，绝不「信息待补」
+        if (!best || !best.formula) {
             return {
                 retrieval_status: 'generic',
                 knowledge_payload: {
                     matched_formula: {
-                        formula_name: '辨证调理（信息待补）', source_book: '通用参考',
-                        description: '当前信息尚不足以精准匹配某一典籍方剂，建议从整体辨证、调和气血方向了解，具体诊疗请遵医嘱。',
+                        formula_name: '整体辨证调理方向', source_book: '通用参考',
+                        description: '当前信息尚不足以精准匹配某一典籍方剂，建议从整体调和气血方向了解，具体诊疗请遵医嘱。',
                         composition: []
                     },
                     matched_herbs: [],
@@ -262,6 +328,10 @@
                 }
             };
         }
+
+        const cat = best.cat, formula = best.formula;
+        const nameToId = buildNameToId(cat, kb);
+        const lowConfidence = best.score < W_ZHUAN; // 无有效专病/十问命中 → 倾向性弱
 
         // 草本知识卡 = 组成药材 ∪ 类目草本（去重），并解析 herb_id 用于点击联动
         const names = new Set((formula.composition || []).concat((cat.herbs || []).map(h => h.name)));
@@ -278,6 +348,21 @@
             };
         });
 
+        // 辨证倾向结论（供前端展示与话术参考）
+        const matchedZhuan = best.zhuan.map(t => tagLabel(t, maps));
+        const matchedShiwen = best.shiwen.map(t => tagLabel(t, maps));
+        let conclusion;
+        if (lowConfidence) {
+            conclusion = '当前勾选的有效信号较少，下列为与您描述最接近的经典方向参考（倾向性较弱，建议补充问诊后由医生进一步辨证）。';
+        } else if (matchedZhuan.length) {
+            conclusion = '综合您勾选的专病特征（' + matchedZhuan.join('、') +
+                (matchedShiwen.length ? '）与基础表现（' + matchedShiwen.join('、') + '）' : '）') +
+                '，系统加权推理（Score=' + best.score + '）将其归为「' + cat.name + '」方向，最贴近典籍方剂「' + formula.formula_name + '」。';
+        } else {
+            conclusion = '依据您勾选的基础表现（' + matchedShiwen.join('、') +
+                '），加权推理（Score=' + best.score + '）将其归为「' + cat.name + '」方向，最贴近「' + formula.formula_name + '」。';
+        }
+
         return {
             retrieval_status: 'success',
             knowledge_payload: {
@@ -288,6 +373,12 @@
                     fruit: formula.fruit, habit: formula.habit
                 },
                 matched_herbs: herbs,
+                bias_conclusion: {
+                    category_id: cat.id, category_name: cat.name,
+                    formula_name: formula.formula_name, source_book: formula.source_book,
+                    score: best.score, matched_zhuan_tags: matchedZhuan, matched_shiwen_tags: matchedShiwen,
+                    low_confidence: lowConfidence, conclusion_text: conclusion
+                },
                 dietary_and_lifestyle_advice: { fruit_guidance: formula.fruit || '', habit_guidance: formula.habit || '' }
             }
         };
@@ -299,11 +390,11 @@
             .replace(/\{\{\s*primary\s*\}\}/g, vars.primary || '')
             .replace(/\{\{\s*aggravating_note\s*\}\}/g, vars.aggravating_note || '');
     }
-    // 由已选信息推导「加重因素」叙述
-    function buildAggravating(answered) {
+    // 由已选信息推导「加重因素」叙述（tag → 人类 label）
+    function buildAggravating(answered, maps) {
         const trig = [];
         answered.forEach(a => {
-            if (a.dim === 'trigger') (a.tags || []).forEach(t => { if (!isNegativeLabel(t)) trig.push(t); });
+            if (a.dim === 'trigger') (a.tags || []).forEach(t => { if (!isNegativeLabel(t)) trig.push(tagLabel(t, maps)); });
         });
         if (trig.length) return '通常在' + trig.join('、') + '时更为明显。';
         return '（具体加重因素我会在就诊时再和您说明）';
@@ -324,7 +415,7 @@
         let doctor_brief = synthText;
         if (fm.doctor_brief_template) {
             doctor_brief = fillTemplate(fm.doctor_brief_template, {
-                onset: '一段时间', primary: (input.primary_symptom || ''), aggravating_note: buildAggravating(input.answered || [])
+                onset: '一段时间', primary: (input.primary_symptom || ''), aggravating_note: buildAggravating(input.answered || [], ctx.tag_maps)
             });
         }
         const herbLine = herbs.map(h => h.herb_name + (h.has_toxicity ? '（毒性药材，需遵医嘱）' : '')).join('、');
@@ -337,6 +428,7 @@
         const sections = {
             tcm_explanation_section: tcm_explanation,
             doctor_communication_brief: doctor_brief,
+            bias_conclusion_section: kp.bias_conclusion || null,
             matched_formula_section: {
                 formula_name: fm.formula_name, source_book: fm.source_book,
                 description: fm.description, composition: fm.composition || []
@@ -346,6 +438,7 @@
             dietary_guidance_section: { fruit_advice: advice.fruit_guidance || '', drink_advice: advice.habit_guidance || '' },
             lifestyle_guidance_section: { habits: (advice.habit_guidance || '').split('。').map(s => s.trim()).filter(Boolean) },
             plain_text_copy_payload: [tcm_explanation, doctor_brief,
+                (kp.bias_conclusion ? ('辨证倾向：' + kp.bias_conclusion.conclusion_text) : ''),
                 fm.formula_name ? ('参考方剂：' + fm.formula_name + '（' + fm.source_book + '）') : '',
                 herbLine, advice.fruit_guidance, advice.habit_guidance, DISCLAIMER].filter(Boolean).join('\n'),
             disclaimer: DISCLAIMER
@@ -443,10 +536,10 @@
         this.state = 'S2';
         return { state: 'S2', data: cl };
     };
-    // S2：用户多选提交（tags 为数组；兼容单字符串）
+    // S2：用户多选提交（tags 为数组；兼容单字符串 / 标签或 tag 混用）
     SymptomSession.prototype.answer = function (tags) {
         if (typeof tags === 'string') tags = [tags];
-        tags = (tags || []).slice();
+        tags = normalizeTags((tags || []).slice(), this.ctx.tag_maps);
         const hasNeg = tags.some(isNegativeLabel);
         this.answered.push({ dim: this.currentDim, tags: tags, negative: hasNeg });
         this.round += 1;
@@ -477,7 +570,10 @@
     // S3 → S4 → S5：确认后检索 + 渲染（S4 为骨架屏瞬态，业务侧处理）
     SymptomSession.prototype.confirm = function () {
         const p = this.confirmation && this.confirmation.ui_card_payload;
-        const ret = this.driver.invoke('retriever', this.ctx, { category_id: this.categoryId }).data;
+        // 汇总已选有效 Tag（排除兜底项），供 5D 加权矩阵评分
+        const selectedTags = [];
+        this.answered.forEach(a => { if (!a.negative) (a.tags || []).forEach(t => { if (t !== FALLBACK_LABEL) selectedTags.push(t); }); });
+        const ret = this.driver.invoke('retriever', this.ctx, { category_id: this.categoryId, selected_tags: selectedTags }).data;
         this.knowledge = ret;
         const fmt = this.driver.invoke('formatter', this.ctx, {
             synthesized_symptom_text: p.synthesized_symptom_text,
