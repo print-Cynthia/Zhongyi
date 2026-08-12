@@ -798,7 +798,7 @@ function symptomSubmit() {
     renderSymptomState('S2', res.data);
 }
 
-// S2 细节追问（动态，来自 LocalMockDriver）
+// S2 细节追问（动态，来自 LocalMockDriver · 五维通用引擎）
 function renderS2HTML(data) {
     const cards = (data.option_cards || []).map(c =>
         `<span class="tag-pill" role="button" tabindex="0" onclick="symptomAnswer('${c.tag}', this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();symptomAnswer('${c.tag}', this);}">${c.label}</span>`
@@ -809,6 +809,9 @@ function renderS2HTML(data) {
             <div style="max-width:600px; margin:0 auto">
                 <p style="font-weight:700; margin-bottom:16px; font-size:16px">${data.question_text || ''}</p>
                 <div style="display:flex; gap:12px; flex-wrap:wrap" id="clarify-cards">${cards}</div>
+                <div style="margin-top:20px">
+                    <button class="ghost-btn" type="button" onclick="symptomBackToEdit()">← 返回修改描述</button>
+                </div>
                 <p style="font-size:12px; color:var(--text-muted); margin-top:16px">（第 ${symptomSession.round} 轮 · 收敛分 ${data.convergence_score}）</p>
             </div>
         </div>
@@ -825,18 +828,33 @@ function symptomAnswer(tag, el) {
     else if (res.state === 'S3') renderSymptomState('S3', res.data);
     symptomClarifyLocked = false;
 }
+// S2 → S1：返回修改描述（保留并回显上一轮文字，允许增删）
+function symptomBackToEdit() {
+    symptomSession.backToEdit();
+    renderSymptomState('S1');
+}
 
-// S3 收敛确认
+// S3 收敛确认（结构化：核心表现 / 兼带细节 / 已排除）
 function renderS3HTML(data) {
     const p = data.ui_card_payload || {};
+    const associated = (p.associated_symptoms || []).map(t => `<li>${t}</li>`).join('');
+    const negative = (p.confirmed_negative || []).map(t => `<li>${t}</li>`).join('');
     return `
         <div class="fade-in">
             <h2 style="text-align:center; margin-bottom:24px">${p.card_title || '确认您的身体信号'}</h2>
             <div style="max-width:600px; margin:0 auto">
-                <div class="report-content" style="font-size:15px">${p.synthesized_symptom_text || ''}</div>
+                <div class="structured-confirm">
+                    <div class="sc-block">
+                        <div class="sc-label">核心表现</div>
+                        <div class="sc-value sc-primary">${p.primary_symptom || ''}</div>
+                    </div>
+                    ${associated.length ? `<div class="sc-block"><div class="sc-label">兼带细节</div><ul class="sc-list">${associated}</ul></div>` : ''}
+                    ${negative.length ? `<div class="sc-block"><div class="sc-label">已排除 / 无异常</div><ul class="sc-list sc-negative">${negative}</ul></div>` : ''}
+                    <div class="sc-block sc-note">${p.synthesized_symptom_text || ''}</div>
+                </div>
                 <div style="margin-top:40px; text-align:center; display:flex; gap:16px; justify-content:center">
                     <button class="search-button" onclick="symptomConfirm()" style="padding:0 40px">确认无误，生成报告</button>
-                    <button class="search-button" style="background:#F3F4F6; color:var(--text-muted)" onclick="symptomEdit()">补充/修改描述</button>
+                    <button class="ghost-btn" onclick="symptomEdit()">补充 / 修改描述</button>
                 </div>
             </div>
         </div>
@@ -850,7 +868,7 @@ function symptomConfirm() {
     }, 650);
 }
 function symptomEdit() {
-    symptomSession.desc = '';
+    // 保留上一轮文字并回显，允许增删修改
     renderSymptomState('S1');
 }
 
@@ -866,15 +884,24 @@ function renderS4SkeletonHTML() {
     `;
 }
 
-// S5 报告渲染（8 模块，来自 Skill 5 输出）
+// S5 报告渲染（8 模块，来自 Skill 5 输出；composition 与草本卡 ID 级强联动）
 function renderS5HTML(data) {
     const sec = (data.ui_card_payload && data.ui_card_payload.sections) || {};
     const fm = sec.matched_formula_section || {};
     const herbs = sec.herb_knowledge_section || [];
     const diet = sec.dietary_guidance_section || {};
     const life = sec.lifestyle_guidance_section || {};
+    // 组成药材名称 → herb_id 映射，用于 ID 级强联动
+    const compMap = {};
+    herbs.forEach(h => { compMap[h.herb_name] = h.herb_id; });
+    const compositionChips = (fm.composition && fm.composition.length) ? fm.composition.map(name => {
+        const cid = compMap[name] || '';
+        return cid
+            ? `<span class="composition-chip" data-herb-id="${cid}" role="button" tabindex="0" onclick="focusHerb('${cid}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();focusHerb('${cid}');}">${name}</span>`
+            : `<span class="composition-chip no-link">${name}</span>`;
+    }).join('') : '';
     const herbCards = herbs.length ? herbs.map(h => `
-        <div class="report-herb${h.has_toxicity ? ' toxic' : ''}" onclick="openDetail('${h.herb_id}','symptom')" role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDetail('${h.herb_id}','symptom');}">
+        <div class="report-herb${h.has_toxicity ? ' toxic' : ''}" data-herb-id="${h.herb_id}" ${h.openable ? `onclick="openDetail('${h.herb_id}','symptom')" role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDetail('${h.herb_id}','symptom');}"` : ''}>
             <div class="report-herb-name">${h.herb_name}${h.has_toxicity ? ' <span class="toxic-tag">毒性药材</span>' : ''}</div>
             <div class="report-herb-desc">${h.description || ''}</div>
             ${h.has_toxicity ? `<div class="report-herb-warn">${h.toxicity_warning || ''}</div>` : ''}
@@ -906,6 +933,7 @@ function renderS5HTML(data) {
                 <div class="report-content" style="background:var(--light-green-bg); color:var(--primary-green); font-weight:700">
                     ${fm.formula_name || '温和调理方向'} ${fm.source_book ? '（' + fm.source_book + '）' : ''}
                     <div style="font-weight:400; font-size:13px; margin-top:8px; color:var(--text-main)">${fm.description || ''}</div>
+                    ${compositionChips ? `<div class="formula-composition"><div class="fc-label">组成药材（点击定位下方知识卡）</div><div class="fc-chips">${compositionChips}</div></div>` : ''}
                 </div>
             </div>
 
@@ -926,7 +954,7 @@ function renderS5HTML(data) {
 
             <div style="margin-top:48px; display:flex; gap:16px; justify-content:center">
                 <button class="search-button" onclick="copyReport()">复制报告</button>
-                <button class="search-button" style="background:#F3F4F6; color:var(--text-muted)" onclick="symptomRestart()">重新整理</button>
+                <button class="ghost-btn" onclick="symptomRestart()">重新整理</button>
             </div>
 
             <p style="text-align:center; font-size:11px; color:var(--text-muted); margin-top:32px; font-style:italic">
@@ -934,6 +962,16 @@ function renderS5HTML(data) {
             </p>
         </div>
     `;
+}
+// 组成药材 → 草本知识卡：点击定位并高亮（ID 级强联动）
+function focusHerb(id) {
+    if (!id) return;
+    const card = document.querySelector('.report-herb[data-herb-id="' + id + '"]');
+    if (card) {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        card.classList.add('linked-highlight');
+        setTimeout(function () { card.classList.remove('linked-highlight'); }, 1600);
+    }
 }
 function symptomRestart() { symptomResetAndRender(); }
 
@@ -953,11 +991,19 @@ function renderSafetyCutoffHTML(data) {
                 <div style="font-size:40px; margin-bottom:12px">⚠</div>
                 <p style="font-size:16px; font-weight:700; color:#E5484D; line-height:1.7">${data.compliance_card || '检测到急性或重症风险，请立即就医。'}</p>
             </div>
-            <div style="margin-top:32px">
-                <button class="search-button" style="background:#F3F4F6; color:var(--text-muted)" onclick="symptomRestart()">重新整理</button>
+            <div style="margin-top:32px; display:flex; gap:16px; justify-content:center">
+                <button class="search-button" onclick="symptomAcknowledgeSafety()">我知道了</button>
+                <button class="ghost-btn" onclick="symptomRestart()">重新整理</button>
             </div>
         </div>
     `;
+}
+// 急症场景：清空危险输入并安全重置回到第一步
+function symptomAcknowledgeSafety() {
+    const el = document.getElementById('symptom-input');
+    if (el) el.value = '';
+    pendingSymptomDescription = '';
+    symptomResetAndRender();
 }
 
 function renderCheckbox(id, label) {

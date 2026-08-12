@@ -44,6 +44,8 @@
 ## 契约层（解耦接缝，稳定层）
 `contracts/` 是「业务逻辑 / 驱动解耦」的核心：3 份契约定义了 5-Skill 流水线、状态机、本地 Mock 驱动的**接口与规范（接缝）**。业务代码只依赖这些契约，未来从 `LocalMockDriver` 切到 `CloudAPIDriver` 时**前端与业务零改动**。阶段 2 起的代码替换以 `contracts/` 为唯一权威，质量组据其写自动预检。
 
+> 检索 Skill 4 的静态知识源为项目根目录 `herbs_rag_db.json`（古籍方剂 + `composition` 组成药材），与 `agent-engine.js` 的 `FORMULA_MAP.composition` 保持一致，质量组已写入一致性预检（见 `qa/mock-driver-qa.js` 整改用例 12）。
+
 ## 角色索引
 - 主管：[roles/master.md](roles/master.md)
 - 设计组：PM [pm-design](roles/pm-design.md) · 部门 [dept-design](roles/dept-design.md) · 员工 [design-ui](staff/design-ui.md) / [design-component](staff/design-component.md) / [design-prototype](staff/design-prototype.md)

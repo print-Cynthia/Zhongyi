@@ -24,19 +24,19 @@
 - 例：`肚子涨 / 腹胀` → 食后腹胀(消化, 0.9)；`口苦` → 口苦(寒热, 0.85)；`睡不着` → 入睡困难(睡眠, 0.9)。
 - `missing_dimensions` = 五维中未命中者；`overall_completeness` 按命中维度数映射 low / medium / high。
 
-### Skill 2 · Clarifier（mock）
-- 依据 extractor 的 `missing_dimensions` / `inference_hypothesis`，从**模板池**抽一道追问 + 3~4 选项卡。
-- **收敛分模拟**：`convergence_score = min(1, 0.5 + 0.1*round + 0.1*(满足[主诉+脏腑+兼次症]的维度数))`。
-- 达 `0.85` 或 `round == 5` → `should_continue = false`。
+### Skill 2 · Clarifier（mock · 五维通用）
+- 通用五维字典 `DIMENSION_DICT = [部位 | 性质寒热 | 饮食 | 二便 | 睡眠]`；extractor 标记 `covered_dimensions` / `missing_dimensions`。
+- 仅对**缺失维度**动态拼装追问卡片（已覆盖维度绝不重复追问），每个卡片**强制追加** `[以上均无 / 无上述情况]` 兜底选项，绝不强迫硬选。
+- **收敛分公式**：`Score = 0.3 + 0.15 * 已覆盖维度数 + 0.1 * Round`；**硬下限 `MIN_ROUNDS = 2`**：`Round < 2` 必继续，否则 `Score ≥ 0.85 且 Round < 5` 才收敛 → 强制 2~3 轮维度补全，杜绝「1 轮假收敛」。
 
-### Skill 3 · Synthesizer（mock）
-- 把 `collected_symptoms` 拼成通顺描述（模板：「主要表现为 X，伴 Y。」），生成确认卡 payload。
-- 矛盾以最新轮为准（取 `source` 最大 round）。
+### Skill 3 · Synthesizer（mock · 结构化）
+- 输出结构化 JSON（非逗号拼接）：`primary_symptom`（核心表现）、`associated_symptoms[]`（兼带细节）、`confirmed_negative[]`（已排除 / 无异常），并附 `synthesized_symptom_text` 可读串，供前端渲染结构化确认卡。
 
-### Skill 4 · Retriever（mock）
-- 按 `confirmed_tags` / `zangfu` 在 `SYMPTOM_DATA` 静态匹配 1~2 方剂与草本。
-- **毒性**：命中 `toxicity_list` → 插入 `toxicity_warning`（静态，无条件）。
-- **空匹配** → 通用「健脾理气 / 温和调理方向」兜底。
+### Skill 4 · Retriever（mock · 组成药材强联动）
+- 静态 RAG 库 `herbs_rag_db.json`（与 `FORMULA_MAP.composition` 保持一致）：每个古籍方剂含必填 `composition: string[]`（组成药材名）。
+- 按 `zangfu_tendency`（综合自由描述命中关键词 + 维度选项推断）匹配方剂，返回 `matched_formula.composition`（组成药材名）与 `matched_herbs`（药材名解析为 `herb_id`，与组成药材 **ID 级强联动**映射）。
+- **毒性**：命中 `toxicity_list`（如半夏 / banxia）→ 插入 `toxicity_warning`（静态，无条件）。
+- **空匹配** → 通用「健脾理气 / 温和调理方向」兜底（`composition` 为空数组）。
 
 ### Skill 5 · Formatter（mock）
 - 聚合上面所有 payload → 8 模块报告 JSON；`disclaimer` 固定文本从 `compliance-rules.md` §1 注入。

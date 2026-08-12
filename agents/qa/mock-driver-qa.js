@@ -1,16 +1,16 @@
 /**
- * agents/qa/mock-driver-qa.js — 阶段 2 质量走查（QA 自动预检）
+ * agents/qa/mock-driver-qa.js — 阶段 2 整改 · 质量走查（QA 自动预检）
  *
- * 依据：agents/contracts/mock-driver.md §5 测试契约（6 个用例）
+ * 依据：agents/contracts/mock-driver.md §5 测试契约（6 个用例）+ CPO 阶段 2 整改新增行为
  * 运行：node agents/qa/mock-driver-qa.js
- * 依赖：../agent-engine.js（LocalMockDriver + 状态机）
+ * 依赖：../agent-engine.js（LocalMockDriver + 状态机）+ ../herbs_rag_db.json（RAG 库一致性）
  *
- * 知识库通过 globalThis.__TEST_SYMPTOM__ / __TEST_HERB__ 注入（引擎 Node 兜底通道），
- * 与浏览器从全局 SYMPTOM_DATA/HERB_DATA 读取保持同一套检索逻辑。
+ * 知识库通过 globalThis.__TEST_SYMPTOM__ / __TEST_HERB__ / __TEST_NAME_TO_ID__ 注入，
+ * 与浏览器从全局 SYMPTOM_DATA/HERB_DATA/CABINET_DATA 读取保持同一套检索逻辑。
  */
 'use strict';
 
-// ---- 0. 注入测试知识库（与 data.js 同构：groups<id/name/keywords[]/herbs[]> + herbs<id/name/oneLiner>） ----
+// ---- 0. 注入测试知识库 ----
 const TEST_SYMPTOM = [
     { id: 'g_huo',  name: '去火', keywords: ['口苦', '咽痛', '上火', '热象', '烦躁'], herbs: ['jinyinhua', 'huanglian', 'banxia'] },
     { id: 'g_qi',   name: '补气', keywords: ['乏力', '气短', '神疲乏力'],              herbs: ['huangqi', 'dangshen'] },
@@ -28,11 +28,16 @@ const TEST_HERB = [
     { id: 'shanyao',   name: '山药',   oneLiner: '补脾养胃，生津益肺' },
     { id: 'yiyiren',   name: '薏苡仁', oneLiner: '利水渗湿，健脾止泻' }
 ];
+// 药材名 → id（覆盖方剂组成药材，确保 ID 级联动解析）
+const TEST_NAME_TO_ID = { '半夏': 'banxia', '黄芩': 'huangqin', '黄连': 'huanglian', '甘草': 'gancao', '党参': 'dangshen', '茯苓': 'fuling' };
+TEST_HERB.forEach(h => { if (!TEST_NAME_TO_ID[h.name]) TEST_NAME_TO_ID[h.name] = h.id; });
 globalThis.__TEST_SYMPTOM__ = TEST_SYMPTOM;
 globalThis.__TEST_HERB__ = TEST_HERB;
+globalThis.__TEST_NAME_TO_ID__ = TEST_NAME_TO_ID;
 
 const engine = require('../../agent-engine.js');
-const { LocalMockDriver, getDriver, SymptomSession, DISCLAIMER, MAX_ROUNDS } = engine;
+const RAG_DB = require('../../herbs_rag_db.json');
+const { LocalMockDriver, getDriver, SymptomSession, DISCLAIMER, MAX_ROUNDS, MIN_ROUNDS, DIMENSION_DICT } = engine;
 
 // ---- 1. 轻量断言框架 ----
 let pass = 0, fail = 0;
@@ -61,11 +66,11 @@ console.log('\n=== 契约用例 2：空 / 模糊输入 → overall_completeness=
     check('提取结果 overall_completeness=low', ext.overall_completeness === 'low', 'got ' + ext.overall_completeness);
     check('模糊输入提取条目 < 2', (ext.extracted_symptoms || []).length < 2);
 
-    // 端到端：模糊输入仍能进入 S2（不崩溃），且后续经补漏/收敛可继续
     const s = new SymptomSession(getDriver('mock'));
     const r = s.submitDescription('最近不太舒服');
     check('模糊输入仍可进入 S2 流程', r.state === 'S2', 'got ' + r.state);
-    check('S2 提供追问卡片（含补漏机制）', r.data && Array.isArray(r.data.option_cards) && r.data.option_cards.length > 0);
+    check('S2 提供追问卡片（含兜底机制）', r.data && Array.isArray(r.data.option_cards) && r.data.option_cards.length > 0);
+    check('每个追问卡片强制含「以上均无」兜底', r.data.option_cards.some(o => o.negative === true));
 }
 
 console.log('\n=== 契约用例 3：连续多轮 → 硬上限 MAX_ROUNDS 强制进 S3（不超轮、不中断） ===');
@@ -74,33 +79,32 @@ console.log('\n=== 契约用例 3：连续多轮 → 硬上限 MAX_ROUNDS 强制
     s.submitDescription('最近状态一般');
     let guard = 0, reachedS3 = false, maxRoundSeen = 0;
     while (s.state === 'S2' && guard < 12) {
-        const r = s.answer('正常'); // '正常' 在 OPTION_DIMENSION 中，逐步累计 dim
+        const r = s.answer('dim_none'); // 兜底选项：逐步覆盖各维度
         maxRoundSeen = Math.max(maxRoundSeen, s.round);
         if (r.state === 'S3') { reachedS3 = true; break; }
         guard++;
     }
     check('最终收敛进入 S3', reachedS3, 'state=' + s.state);
     check('轮次未超过硬上限 MAX_ROUNDS=' + MAX_ROUNDS, maxRoundSeen <= MAX_ROUNDS, 'maxRoundSeen=' + maxRoundSeen);
-    // 硬停守卫：直接把 round 推到上限并再答一次，必须强制 S3
+
     const s2 = new SymptomSession(getDriver('mock'));
     s2.submitDescription('口苦');
     s2.round = MAX_ROUNDS - 1; // 下一轮即达上限
-    const hard = s2.answer('怕冷');
+    const hard = s2.answer('dim_prop_cold');
     check('达 MAX_ROUNDS 时强制进入 S3（无论收敛分）', hard.state === 'S3', 'got ' + hard.state);
 }
 
 console.log('\n=== 契约用例 4：命中毒性药材 → has_toxicity=true 且 toxicity_warning 存在 ===');
 {
     const s = new SymptomSession(getDriver('mock'));
-    // 去火 group 含 banxia（毒性），以“口苦、咽痛、上火”触发去火倾向
+    // 去火 group → 半夏泻心汤（组成含 半夏 / banxia，毒性）
     s.submitDescription('口苦、咽痛、最近有点上火');
-    // 直接收敛若干轮到 S3 再 confirm
     let guard = 0;
-    while (s.state === 'S2' && guard < 8) { const r = s.answer('正常'); if (r.state === 'S3') break; guard++; }
+    while (s.state === 'S2' && guard < 8) { const r = s.answer('dim_none'); if (r.state === 'S3') break; guard++; }
     const rep = s.confirm();
     const herbs = (rep.data.ui_card_payload.sections.herb_knowledge_section) || [];
     const toxic = herbs.filter(h => h.has_toxicity);
-    check('报告含草本条目', herbs.length > 0, 'herbs=' + herbs.length);
+    check('报告含草本条目（=组成药材数）', herbs.length > 0, 'herbs=' + herbs.length);
     check('至少 1 个 has_toxicity=true', toxic.length >= 1, 'toxic=' + toxic.length);
     check('毒性草本带 toxicity_warning 文案', toxic.every(h => typeof h.toxicity_warning === 'string' && h.toxicity_warning.length > 0));
     check('毒性草本标记为 banxia（半夏）', toxic.some(h => h.herb_id === 'banxia'));
@@ -111,7 +115,7 @@ console.log('\n=== 契约用例 5：断网 / 无后端 → 仍产出报告（moc
     const s = new SymptomSession(getDriver('mock'));
     s.submitDescription('口苦、睡不好、容易烦躁'); // 倾向安神
     let guard = 0;
-    while (s.state === 'S2' && guard < 8) { const r = s.answer('正常'); if (r.state === 'S3') break; guard++; }
+    while (s.state === 'S2' && guard < 8) { const r = s.answer('dim_none'); if (r.state === 'S3') break; guard++; }
     const rep = s.confirm();
     check('confirm 返回 S5 报告', rep.state === 'S5', 'got ' + rep.state);
     const sec = rep.data.ui_card_payload.sections;
@@ -125,39 +129,121 @@ console.log('\n=== 契约用例 5：断网 / 无后端 → 仍产出报告（moc
 
 console.log('\n=== 契约用例 6：任意 Skill 异常 → 走 FALLBACK，主流程不中断，报告末尾有 disclaimer ===');
 {
-    // 6a. 驱动层对 Skill 异常兜底：构造会让 skill 抛错的数据（getKB 读取即抛），驱动必须吞掉并返回 fallback
-    //     —— 选用 retriever（会调用 getKB 遍历 SYMPTOM_DATA），以触发注入的异常
     globalThis.__TEST_SYMPTOM__ = { get length() { throw new Error('simulated skill failure'); } };
     const drv = new LocalMockDriver();
     let threw = false, fb;
-    try { fb = drv.invoke('retriever', { red_list: [] }, { zangfu_tendency: '去火', confirmed_tags: ['热象'] }); }
+    try { fb = drv.invoke('retriever', { red_list: [] }, { zangfu_tendency: '未知方剂组', confirmed_tags: ['热象'] }); }
     catch (e) { threw = true; }
     check('driver.invoke 遇 Skill 异常不向外抛', threw === false);
     check('异常时返回 ok=false 且 fallback_used=true', fb && fb.ok === false && fb.fallback_used === true);
-    // 恢复知识库
     globalThis.__TEST_SYMPTOM__ = TEST_SYMPTOM;
 
-    // 6b. 未知 skillId 同样走兜底
     const fb2 = drv.invoke('no_such_skill', {}, {});
     check('未知 skillId 兜底（ok=false, fallback_used=true）', fb2.ok === false && fb2.fallback_used === true);
 
-    // 6c. 即便链路部分降级，formatter 仍输出固定 disclaimer（报告末尾合规红牌/免责到位）
     const fmt = drv.invoke('formatter', {}, { synthesized_symptom_text: '主要表现为口苦。', knowledge_payload: {} }).data;
     check('formatter 输出固定 disclaimer', fmt.ui_card_payload.sections.disclaimer === DISCLAIMER);
 
-    // 6d. 端到端：某轮 Skill 返回空（降级）时，会话不中断且能走到报告
     const s = new SymptomSession(getDriver('mock'));
-    const r0 = s.submitDescription('有点累'); // extractor 正常但条目少，仍进 S2
+    const r0 = s.submitDescription('有点累');
     check('降级场景下 submitDescription 不中断', r0.state === 'S2');
 }
 
-// ---- 3. 汇总 ----
+// ---- 3. 阶段 2 整改新增行为 ----
+console.log('\n=== 整改用例 7：五维通用追问（不重复已覆盖维度 + 兜底 + 轮转） ===');
+{
+    // (a) 已覆盖维度不再被追问
+    const s0 = new SymptomSession(getDriver('mock'));
+    s0.submitDescription('咽痛'); // 覆盖 body
+    check('已覆盖部位时不追问 body', s0.currentDim !== 'body', 'firstDim=' + s0.currentDim);
+    check('首轮追问卡片含「以上均无」兜底', (s0.currentOptions || []).some(o => o.negative === true));
+
+    // (b) 维度轮转：0 覆盖输入，首轮问 body，下一轮换缺失维度（用兜底不提前收敛）
+    const s = new SymptomSession(getDriver('mock'));
+    s.submitDescription('最近不太舒服');
+    const firstDim = s.currentDim;
+    s.answer('dim_none');
+    check('第二轮追问维度与首轮不同（通用轮转）', s.state === 'S3' ? true : (s.currentDim !== firstDim), 'round2 dim=' + s.currentDim);
+}
+
+console.log('\n=== 整改用例 8：收敛硬下限 MIN_ROUNDS=' + MIN_ROUNDS + '（杜绝 1 轮假收敛） ===');
+{
+    const s = new SymptomSession(getDriver('mock'));
+    // 一次性覆盖全部五维 → 理论上完备，但仍须至少 MIN_ROUNDS 轮
+    s.submitDescription('头痛、怕冷、没胃口、便溏、失眠');
+    check('五维全覆盖后首轮仍继续追问（round<MIN_ROUNDS）', s.state === 'S2', 'state=' + s.state);
+    let rounds = 1;
+    while (s.state === 'S2' && rounds < 10) { s.answer('dim_none'); rounds++; }
+    check('收敛发生在第 ≥' + MIN_ROUNDS + ' 轮', rounds >= MIN_ROUNDS, 'rounds=' + rounds);
+    check('收敛后进入 S3', s.state === 'S3', 'state=' + s.state);
+}
+
+console.log('\n=== 整改用例 9：Skill 3 结构化载荷（primary/associated/negative） ===');
+{
+    const s = new SymptomSession(getDriver('mock'));
+    s.submitDescription('口苦、咽痛，最近有点上火'); // 去火（主诉）
+    // 选一个「以上均无」表示无异常，并选一个正选项作为兼次
+    let guard = 0;
+    while (s.state === 'S2' && guard < 8) {
+        const opt = (s.currentOptions || []).find(o => !o.negative) || s.currentOptions[0];
+        s.answer(opt.tag);
+        guard++;
+    }
+    const p = s.confirmation.ui_card_payload;
+    check('确认卡含 primary_symptom（字符串）', typeof p.primary_symptom === 'string' && p.primary_symptom.length > 0);
+    check('确认卡含 associated_symptoms（数组）', Array.isArray(p.associated_symptoms));
+    check('确认卡含 confirmed_negative（数组）', Array.isArray(p.confirmed_negative));
+    check('含合成可读文本 synthesized_symptom_text', typeof p.synthesized_symptom_text === 'string' && p.synthesized_symptom_text.length > 0);
+}
+
+console.log('\n=== 整改用例 10：Skill 4 方剂组成药材 + ID 级强联动 ===');
+{
+    const s = new SymptomSession(getDriver('mock'));
+    s.submitDescription('口苦、咽痛、上火');
+    let guard = 0;
+    while (s.state === 'S2' && guard < 8) { s.answer('dim_none'); if (s.state === 'S3') break; guard++; }
+    const rep = s.confirm();
+    const fm = rep.data.ui_card_payload.sections.matched_formula_section;
+    const herbs = rep.data.ui_card_payload.sections.herb_knowledge_section || [];
+    check('方剂含 composition 数组', Array.isArray(fm.composition) && fm.composition.length > 0);
+    check('草本知识卡数量 == 组成药材数量（强联动完整）', herbs.length === fm.composition.length, herbs.length + ' vs ' + fm.composition.length);
+    const ids = new Set(herbs.map(h => h.herb_id));
+    const nameToId = globalThis.__TEST_NAME_TO_ID__;
+    const allLinked = fm.composition.every(name => ids.has(nameToId[name] || ('hb_' + name)));
+    check('每个组成药材均可映射到一张草本知识卡（ID 级联动）', allLinked);
+}
+
+console.log('\n=== 整改用例 11：急症返回 + 返回修改描述（backToEdit 回显） ===');
+{
+    const s = new SymptomSession(getDriver('mock'));
+    s.submitDescription('最近总是口苦、睡不好');
+    check('提交后进入 S2', s.state === 'S2');
+    const back = s.backToEdit();
+    check('backToEdit 回到 S1', back.state === 'S1');
+    check('backToEdit 保留并回显上一轮描述文字', back.data && back.data.desc === '最近总是口苦、睡不好', 'desc=' + (back.data && back.data.desc));
+}
+
+console.log('\n=== 整改用例 12：herbs_rag_db.json 与引擎 FORMULA_MAP 一致性 ===');
+{
+    const fm = engine.FORMULA_MAP;
+    const groups = Object.keys(fm);
+    let parity = true;
+    groups.forEach(g => {
+        const db = RAG_DB.formulas[g];
+        if (!db || JSON.stringify(db.composition) !== JSON.stringify(fm[g].composition)) parity = false;
+    });
+    check('JSON 含全部 4 个方剂组', groups.every(g => !!RAG_DB.formulas[g]), 'groups=' + groups.join(','));
+    check('JSON 各方剂 composition 与引擎 FORMULA_MAP 完全一致', parity);
+    check('JSON 五维字典数量为 5', Array.isArray(RAG_DB.formulas) === false && DIMENSION_DICT.length === 5);
+}
+
+// ---- 4. 汇总 ----
 console.log('\n=========================================');
 console.log('QA 结果：通过 ' + pass + ' / 失败 ' + fail);
 if (fail > 0) {
     console.log('失败项：\n - ' + fails.join('\n - '));
     process.exit(1);
 } else {
-    console.log('全部 6 个契约用例通过 ✅');
+    console.log('全部契约用例 + 整改用例通过 ✅');
     process.exit(0);
 }
