@@ -150,7 +150,7 @@ function showSymptomPage() {
     pendingSymptomDescription = '';
     symptomAnswers = {};
     switchPage('symptom');
-    initSymptomStep(1);
+    symptomResetAndRender();
 }
 
 function switchPage(id) {
@@ -553,7 +553,7 @@ function openSymptomOrganizer(description) {
     symptomAnswers = {};
     if (pendingSymptomDescription) symptomAnswers.desc = pendingSymptomDescription;
     switchPage('symptom');
-    initSymptomStep(1);
+    symptomResetAndRender();
 }
 
 function focusLibrarySearch() {
@@ -722,20 +722,44 @@ function goBackFromDetail() {
     }
 }
 
-// --- 身体信号整理流程 ---
-function initSymptomStep(step) {
-    currentStep = step;
-    const container = document.getElementById('symptom-step-container');
+// --- 身体信号整理流程 · 引擎驱动（阶段 2：LocalMockDriver + 状态机 S0~S6） ---
+const symptomSession = new SymptomAgentEngine.SymptomSession(SymptomAgentEngine.getDriver('mock'));
+let symptomClarifyLocked = false;
+let lastReportData = null;
 
-    // 更新流程条
+// 4 步 Stepper 与状态机映射：S0→1, S1→2, S2/S3→3, S4/S5→4；SAFETY_CUTOFF 停在 2
+function updateStepper(activeStep) {
     for (let i = 1; i <= 4; i++) {
         const label = document.getElementById(`step-${i}-label`);
-        if (i <= step) label.classList.add('active');
+        if (!label) continue;
+        if (i <= activeStep) label.classList.add('active');
         else label.classList.remove('active');
     }
+}
 
-    if (step === 1) {
-        container.innerHTML = `
+// 入口：重置会话并渲染 S0
+function symptomResetAndRender() {
+    symptomSession.restart();
+    renderSymptomState('S0');
+}
+
+// 状态 → 渲染分发
+function renderSymptomState(state, data) {
+    const container = document.getElementById('symptom-step-container');
+    if (!container) return;
+    if (state === 'S0') { updateStepper(1); container.innerHTML = renderS0HTML(); }
+    else if (state === 'S1') { updateStepper(2); container.innerHTML = renderS1HTML(); }
+    else if (state === 'S2') { updateStepper(3); container.innerHTML = renderS2HTML(data); }
+    else if (state === 'S3') { updateStepper(3); container.innerHTML = renderS3HTML(data); }
+    else if (state === 'S4') { updateStepper(4); container.innerHTML = renderS4SkeletonHTML(); }
+    else if (state === 'S5') { updateStepper(4); lastReportData = data; container.innerHTML = renderS5HTML(data); }
+    else if (state === 'SAFETY_CUTOFF') { updateStepper(2); container.innerHTML = renderSafetyCutoffHTML(data); }
+}
+
+// S0 安全提醒
+function renderS0HTML() {
+    return `
+        <div class="fade-in">
             <h2 style="text-align:center; margin-bottom:40px">在开始前，请确认您的基本情况</h2>
             <div style="max-width:480px; margin:0 auto">
                 ${renderCheckbox('s_preg', '是否怀孕或备孕')}
@@ -743,36 +767,197 @@ function initSymptomStep(step) {
                 ${renderCheckbox('s_risk', '是否有高烧、胸痛等紧急症状')}
                 ${renderCheckbox('s_chronic', '是否有慢性疾病')}
                 <div style="margin-top:40px; text-align:center">
-                    <button class="search-button" onclick="initSymptomStep(2)" style="padding:0 60px">确认并开始</button>
+                    <button class="search-button" onclick="symptomStartInput()" style="padding:0 60px">确认并开始</button>
                 </div>
             </div>
-        `;
-    } else if (step === 2) {
-        container.innerHTML = `
+        </div>
+    `;
+}
+
+// S1 输入描述
+function symptomStartInput() { renderSymptomState('S1'); }
+function renderS1HTML() {
+    const prefill = pendingSymptomDescription || (symptomSession.desc || '');
+    pendingSymptomDescription = '';
+    return `
+        <div class="fade-in">
             <h2 style="margin-bottom:32px">请描述您的身体表现</h2>
             <textarea id="symptom-input" placeholder="例如：最近总是口苦、睡不好、容易烦躁、胃口一般。" style="width:100%; height:200px; border:1px solid var(--border-color); border-radius:16px; padding:24px; font-size:16px; background:white; resize:none"></textarea>
             <div style="margin-top:40px; text-align:center">
-                <button class="search-button" onclick="handleStep2()" style="padding:0 60px">开始整理</button>
+                <button class="search-button" onclick="symptomSubmit()" style="padding:0 60px">开始整理</button>
             </div>
-        `;
-        const symptomInput = document.getElementById('symptom-input');
-        if (symptomInput) symptomInput.value = pendingSymptomDescription || symptomAnswers.desc || '';
-        pendingSymptomDescription = '';
-    } else if (step === 3) {
-        container.innerHTML = `
-            <h2 style="text-align:center; margin-bottom:40px">为了更准确，请补充细节</h2>
+        </div>
+    `;
+}
+function symptomSubmit() {
+    const el = document.getElementById('symptom-input');
+    const val = el ? el.value.trim() : '';
+    if (!val) { alert('请输入描述'); return; }
+    const res = symptomSession.submitDescription(val);
+    if (res.state === 'SAFETY_CUTOFF') { renderSymptomState('SAFETY_CUTOFF', res.data); return; }
+    renderSymptomState('S2', res.data);
+}
+
+// S2 细节追问（动态，来自 LocalMockDriver）
+function renderS2HTML(data) {
+    const cards = (data.option_cards || []).map(c =>
+        `<span class="tag-pill" role="button" tabindex="0" onclick="symptomAnswer('${c.tag}', this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();symptomAnswer('${c.tag}', this);}">${c.label}</span>`
+    ).join('');
+    return `
+        <div class="fade-in">
+            <h2 style="text-align:center; margin-bottom:24px">为了更准确，请补充细节</h2>
             <div style="max-width:600px; margin:0 auto">
-                ${renderQuestion('怕冷怕热', '您更容易怕冷还是怕热？', ['怕冷', '怕热', '都不明显'])}
-                ${renderQuestion('睡眠', '您的睡眠主要问题是？', ['入睡困难', '容易醒', '多梦', '正常'])}
-                ${renderQuestion('大便', '您的大便情况更接近？', ['偏干', '偏稀', '黏腻', '正常'])}
-                <div style="margin-top:40px; text-align:center">
-                    <button class="search-button" onclick="initSymptomStep(4)" style="padding:0 60px">生成分析报告</button>
+                <p style="font-weight:700; margin-bottom:16px; font-size:16px">${data.question_text || ''}</p>
+                <div style="display:flex; gap:12px; flex-wrap:wrap" id="clarify-cards">${cards}</div>
+                <p style="font-size:12px; color:var(--text-muted); margin-top:16px">（第 ${symptomSession.round} 轮 · 收敛分 ${data.convergence_score}）</p>
+            </div>
+        </div>
+    `;
+}
+function symptomAnswer(tag, el) {
+    if (symptomClarifyLocked) return;
+    symptomClarifyLocked = true;
+    // 选项卡片防重复点击：禁用整组
+    const group = document.getElementById('clarify-cards');
+    if (group) group.querySelectorAll('.tag-pill').forEach(t => { t.style.pointerEvents = 'none'; t.style.opacity = '0.55'; });
+    const res = symptomSession.answer(tag);
+    if (res.state === 'S2') renderSymptomState('S2', res.data);
+    else if (res.state === 'S3') renderSymptomState('S3', res.data);
+    symptomClarifyLocked = false;
+}
+
+// S3 收敛确认
+function renderS3HTML(data) {
+    const p = data.ui_card_payload || {};
+    return `
+        <div class="fade-in">
+            <h2 style="text-align:center; margin-bottom:24px">${p.card_title || '确认您的身体信号'}</h2>
+            <div style="max-width:600px; margin:0 auto">
+                <div class="report-content" style="font-size:15px">${p.synthesized_symptom_text || ''}</div>
+                <div style="margin-top:40px; text-align:center; display:flex; gap:16px; justify-content:center">
+                    <button class="search-button" onclick="symptomConfirm()" style="padding:0 40px">确认无误，生成报告</button>
+                    <button class="search-button" style="background:#F3F4F6; color:var(--text-muted)" onclick="symptomEdit()">补充/修改描述</button>
                 </div>
             </div>
-        `;
-    } else if (step === 4) {
-        renderReport(container);
-    }
+        </div>
+    `;
+}
+function symptomConfirm() {
+    renderSymptomState('S4'); // 骨架屏瞬态（S4 检索加载）
+    setTimeout(() => {
+        const res = symptomSession.confirm();
+        renderSymptomState('S5', res.data);
+    }, 650);
+}
+function symptomEdit() {
+    symptomSession.desc = '';
+    renderSymptomState('S1');
+}
+
+// S4 骨架屏
+function renderS4SkeletonHTML() {
+    return `
+        <div class="fade-in skeleton-screen">
+            <div class="skeleton-bar"></div>
+            <div class="skeleton-bar"></div>
+            <div class="skeleton-bar short"></div>
+            <p class="skeleton-text">正在检索中医典籍与草本知识库...</p>
+        </div>
+    `;
+}
+
+// S5 报告渲染（8 模块，来自 Skill 5 输出）
+function renderS5HTML(data) {
+    const sec = (data.ui_card_payload && data.ui_card_payload.sections) || {};
+    const fm = sec.matched_formula_section || {};
+    const herbs = sec.herb_knowledge_section || [];
+    const diet = sec.dietary_guidance_section || {};
+    const life = sec.lifestyle_guidance_section || {};
+    const herbCards = herbs.length ? herbs.map(h => `
+        <div class="report-herb${h.has_toxicity ? ' toxic' : ''}" onclick="openDetail('${h.herb_id}','symptom')" role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDetail('${h.herb_id}','symptom');}">
+            <div class="report-herb-name">${h.herb_name}${h.has_toxicity ? ' <span class="toxic-tag">毒性药材</span>' : ''}</div>
+            <div class="report-herb-desc">${h.description || ''}</div>
+            ${h.has_toxicity ? `<div class="report-herb-warn">${h.toxicity_warning || ''}</div>` : ''}
+        </div>
+    `).join('') : '<div class="report-content">暂无特别匹配的草本，建议从温和调理方向了解。</div>';
+    const habitItems = (life.habits || []).map(h => `<li>${h}</li>`).join('');
+
+    return `
+        <div class="fade-in report-card">
+            <div style="text-align:center; margin-bottom:40px">
+                <h2 style="color:var(--primary-green)">身体信号整理报告</h2>
+                <p style="font-size:12px; color:var(--text-muted)">报告生成时间：${new Date().toLocaleString()}</p>
+            </div>
+
+            <div class="report-section">
+                <h5>通俗译释</h5>
+                <div class="report-content">${sec.tcm_explanation_section || ''}</div>
+            </div>
+
+            <div class="report-section">
+                <h5>面诊沟通话术</h5>
+                <div class="report-content">${sec.doctor_communication_brief || ''}
+                    <div style="margin-top:12px"><button class="search-button" style="padding:0 24px; font-size:13px" onclick="copyDoctorBrief()">复制话术给医生</button></div>
+                </div>
+            </div>
+
+            <div class="report-section">
+                <h5>古籍经典方剂参考</h5>
+                <div class="report-content" style="background:var(--light-green-bg); color:var(--primary-green); font-weight:700">
+                    ${fm.formula_name || '温和调理方向'} ${fm.source_book ? '（' + fm.source_book + '）' : ''}
+                    <div style="font-weight:400; font-size:13px; margin-top:8px; color:var(--text-main)">${fm.description || ''}</div>
+                </div>
+            </div>
+
+            <div class="report-section">
+                <h5>相关草本知识</h5>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">${herbCards}</div>
+            </div>
+
+            <div class="report-section">
+                <h5>食疗避忌</h5>
+                <div class="report-content">${diet.fruit_advice || ''}</div>
+            </div>
+
+            <div class="report-section">
+                <h5>日常作息</h5>
+                <div class="report-content"><ul style="margin:0; padding-left:18px; line-height:1.9">${habitItems}</ul></div>
+            </div>
+
+            <div style="margin-top:48px; display:flex; gap:16px; justify-content:center">
+                <button class="search-button" onclick="copyReport()">复制报告</button>
+                <button class="search-button" style="background:#F3F4F6; color:var(--text-muted)" onclick="symptomRestart()">重新整理</button>
+            </div>
+
+            <p style="text-align:center; font-size:11px; color:var(--text-muted); margin-top:32px; font-style:italic">
+                ${sec.disclaimer || ''}
+            </p>
+        </div>
+    `;
+}
+function symptomRestart() { symptomResetAndRender(); }
+
+// 复制面诊话术（取自 Skill 5 输出，不依赖 DOM 抓取）
+function copyDoctorBrief() {
+    const text = (lastReportData && lastReportData.ui_card_payload && lastReportData.ui_card_payload.sections.doctor_communication_brief) || '';
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => alert('话术已复制')).catch(() => alert('复制失败，请手动选择'));
+    } else alert('当前环境不支持自动复制');
+}
+
+// 红线切断（SAFETY_CUTOFF）固定合规红卡
+function renderSafetyCutoffHTML(data) {
+    return `
+        <div class="fade-in" style="max-width:560px; margin:0 auto; text-align:center">
+            <div style="border:2px solid #E5484D; border-radius:16px; padding:32px; background:#FFF5F5">
+                <div style="font-size:40px; margin-bottom:12px">⚠</div>
+                <p style="font-size:16px; font-weight:700; color:#E5484D; line-height:1.7">${data.compliance_card || '检测到急性或重症风险，请立即就医。'}</p>
+            </div>
+            <div style="margin-top:32px">
+                <button class="search-button" style="background:#F3F4F6; color:var(--text-muted)" onclick="symptomRestart()">重新整理</button>
+            </div>
+        </div>
+    `;
 }
 
 function renderCheckbox(id, label) {
@@ -785,79 +970,7 @@ function renderCheckbox(id, label) {
     `;
 }
 
-function renderQuestion(id, q, opts) {
-    return `
-        <div style="margin-bottom:32px">
-            <p style="font-weight:700; margin-bottom:16px">${q}</p>
-            <div style="display:flex; gap:12px; flex-wrap:wrap">
-                ${opts.map(o => `<span class="tag-pill" onclick="saveAnswer('${id}', '${o}', this)">${o}</span>`).join('')}
-            </div>
-        </div>
-    `;
-}
-
-function saveAnswer(id, val, el) {
-    el.parentElement.querySelectorAll('.tag-pill').forEach(t => {
-        t.style.background = 'var(--light-green-bg)';
-        t.style.color = 'var(--primary-green)';
-    });
-    el.style.background = 'var(--primary-green)';
-    el.style.color = 'white';
-    symptomAnswers[id] = val;
-}
-
-function handleStep2() {
-    const val = document.getElementById('symptom-input') ? document.getElementById('symptom-input').value : '';
-    if (!val) { alert('请输入描述'); return; }
-    symptomAnswers['desc'] = val;
-    initSymptomStep(3);
-}
-
-function renderReport(container) {
-    const desc = symptomAnswers['desc'] || "";
-    let direction = desc.includes('火') || desc.includes('苦') ? "火热扰心" : "脾胃不和";
-    let recs = desc.includes('火') ? ['jinyinhua', 'juhua'] : ['chenpi', 'fuling'];
-
-    container.innerHTML = `
-        <div class="report-card">
-            <div style="text-align:center; margin-bottom:40px">
-                <h2 style="color:var(--primary-green)">身体信号整理报告</h2>
-                <p style="font-size:12px; color:var(--text-muted)">报告生成时间：${new Date().toLocaleString()}</p>
-            </div>
-
-            <div class="report-section">
-                <h5>您的主要描述</h5>
-                <div class="report-content">${desc}</div>
-            </div>
-
-            <div class="report-section">
-                <h5>相关中医方向参考</h5>
-                <div class="report-content" style="background:var(--light-green-bg); color:var(--primary-green); font-weight:700">
-                    可能接近：${direction} 方向
-                </div>
-            </div>
-
-            <div class="report-section">
-                <h5>相关草本知识</h5>
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
-                    ${recs.map(rid => {
-                        const h = HERB_DATA.find(item => item.id === rid);
-                        return `<div style="padding:12px; border:1px solid var(--border-color); border-radius:12px; font-size:13px">${h.name}：${h.oneLiner}</div>`;
-                    }).join('')}
-                </div>
-            </div>
-
-            <div style="margin-top:48px; display:flex; gap:16px; justify-content:center">
-                <button class="search-button" onclick="copyReport()">复制报告</button>
-                <button class="search-button" style="background:#F3F4F6; color:var(--text-muted)" onclick="initSymptomStep(1)">重新整理</button>
-            </div>
-
-            <p style="text-align:center; font-size:11px; color:var(--text-muted); margin-top:32px; font-style:italic">
-                提示：本报告仅用于身体表现整理和中医知识学习，不构成医疗诊断或处方建议。
-            </p>
-        </div>
-    `;
-}
+// 旧静态追问 / 硬编码报告已移除，由 LocalMockDriver + 状态机（S0~S6）驱动替代。
 
 // 复制报告（真实复制到剪贴板，带降级提示）
 function copyReport() {
