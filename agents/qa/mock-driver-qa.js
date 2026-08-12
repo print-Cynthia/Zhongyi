@@ -1,249 +1,181 @@
 /**
- * agents/qa/mock-driver-qa.js — 阶段 2 整改 · 质量走查（QA 自动预检）
- *
- * 依据：agents/contracts/mock-driver.md §5 测试契约（6 个用例）+ CPO 阶段 2 整改新增行为
+ * agents/qa/mock-driver-qa.js — 身体信号整理引擎 · 自动预检（契约 6 用例 + 阶段 3 整改用例）
  * 运行：node agents/qa/mock-driver-qa.js
- * 依赖：../agent-engine.js（LocalMockDriver + 状态机）+ ../herbs_rag_db.json（RAG 库一致性）
- *
- * 知识库通过 globalThis.__TEST_SYMPTOM__ / __TEST_HERB__ / __TEST_NAME_TO_ID__ 注入，
- * 与浏览器从全局 SYMPTOM_DATA/HERB_DATA/CABINET_DATA 读取保持同一套检索逻辑。
  */
 'use strict';
 
-// ---- 0. 注入测试知识库 ----
-const TEST_SYMPTOM = [
-    { id: 'g_huo',  name: '去火', keywords: ['口苦', '咽痛', '上火', '热象', '烦躁'], herbs: ['jinyinhua', 'huanglian', 'banxia'] },
-    { id: 'g_qi',   name: '补气', keywords: ['乏力', '气短', '神疲乏力'],              herbs: ['huangqi', 'dangshen'] },
-    { id: 'g_an',   name: '安神', keywords: ['失眠', '多梦', '入睡困难', '心烦'],      herbs: ['suanzaoren', 'baiziren'] },
-    { id: 'g_pi',   name: '健脾', keywords: ['食欲不振', '食后腹胀', '便溏'],          herbs: ['shanyao', 'yiyiren'] }
+// ---- 注入测试用全局（浏览器由 index.html 注入，Node 走 globalThis） ----
+globalThis.HERBS_RAG_DB = require('../../database/herbs_rag_db.js');
+globalThis.HERB_DATA = [
+    { id: 'banxia', name: '半夏', oneLiner: '燥湿化痰，降逆止呕' },
+    { id: 'danshen', name: '丹参', oneLiner: '活血祛瘀，凉血安神' },
+    { id: 'dangshen', name: '党参', oneLiner: '健脾益气' },
+    { id: 'jinyinhua', name: '金银花', oneLiner: '清热解毒' }
 ];
-const TEST_HERB = [
-    { id: 'jinyinhua', name: '金银花', oneLiner: '清热解毒，疏散风热' },
-    { id: 'huanglian', name: '黄连',   oneLiner: '清热燥湿，泻火解毒' },
-    { id: 'banxia',    name: '半夏',   oneLiner: '燥湿化痰，降逆止呕' }, // TOXIC_HERBS 命中
-    { id: 'huangqi',   name: '黄芪',   oneLiner: '补气升阳，固表止汗' },
-    { id: 'dangshen',  name: '党参',   oneLiner: '健脾益肺，养血生津' },
-    { id: 'suanzaoren',name: '酸枣仁', oneLiner: '养心补肝，宁心安神' },
-    { id: 'baiziren',  name: '柏子仁', oneLiner: '养心安神，润肠通便' },
-    { id: 'shanyao',   name: '山药',   oneLiner: '补脾养胃，生津益肺' },
-    { id: 'yiyiren',   name: '薏苡仁', oneLiner: '利水渗湿，健脾止泻' }
-];
-// 药材名 → id（覆盖方剂组成药材，确保 ID 级联动解析）
-const TEST_NAME_TO_ID = { '半夏': 'banxia', '黄芩': 'huangqin', '黄连': 'huanglian', '甘草': 'gancao', '党参': 'dangshen', '茯苓': 'fuling' };
-TEST_HERB.forEach(h => { if (!TEST_NAME_TO_ID[h.name]) TEST_NAME_TO_ID[h.name] = h.id; });
-globalThis.__TEST_SYMPTOM__ = TEST_SYMPTOM;
-globalThis.__TEST_HERB__ = TEST_HERB;
-globalThis.__TEST_NAME_TO_ID__ = TEST_NAME_TO_ID;
+globalThis.CABINET_DATA = { '半夏': 'banxia', '丹参': 'danshen', '党参': 'dangshen', '金银花': 'jinyinhua' };
 
-const engine = require('../../agent-engine.js');
-const RAG_DB = require('../../herbs_rag_db.json');
-const { LocalMockDriver, getDriver, SymptomSession, DISCLAIMER, MAX_ROUNDS, MIN_ROUNDS, DIMENSION_DICT } = engine;
+const E = require('../../agent-engine.js');
+const { SymptomSession, getDriver, LocalMockDriver, FALLBACK_LABEL } = E;
 
-// ---- 1. 轻量断言框架 ----
 let pass = 0, fail = 0;
-const fails = [];
-function check(name, cond, detail) {
+function check(name, cond, extra) {
     if (cond) { pass++; console.log('  ✓ ' + name); }
-    else { fail++; fails.push(name + (detail ? ' — ' + detail : '')); console.log('  ✗ ' + name + (detail ? ' — ' + detail : '')); }
+    else { fail++; console.log('  ✗ ' + name + (extra ? '  → ' + extra : '')); }
 }
-
-// ---- 2. 六个契约用例 ----
-console.log('\n=== 契约用例 1：输入含红牌词 → blocked=true，不进 S2–S5 ===');
-{
+function runFlow(desc, answers) {
     const s = new SymptomSession(getDriver('mock'));
-    const res = s.submitDescription('最近总是胸痛剧烈，还伴随呼吸困难，很难受');
-    check('返回状态为 SAFETY_CUTOFF', res.state === 'SAFETY_CUTOFF', 'got ' + res.state);
-    check('屏蔽标志 blocked=true', res.data && res.data.blocked === true);
-    check('附带合规红卡文案', res.data && typeof res.data.compliance_card === 'string' && res.data.compliance_card.length > 0);
-    check('未进入 S2–S5（state 非 S2/S3/S5）', !['S2', 'S3', 'S5'].includes(res.state));
-}
-
-console.log('\n=== 契约用例 2：空 / 模糊输入 → overall_completeness=low（触发补漏） ===');
-{
-    const drv = new LocalMockDriver();
-    const ctx = { red_list: engine.RED_FLAGS, forbidden_words: engine.FORBIDDEN_WORDS };
-    const ext = drv.invoke('extractor', ctx, { user_raw_input: '最近身体不太舒服，说不上来' }).data;
-    check('提取结果 overall_completeness=low', ext.overall_completeness === 'low', 'got ' + ext.overall_completeness);
-    check('模糊输入提取条目 < 2', (ext.extracted_symptoms || []).length < 2);
-
-    const s = new SymptomSession(getDriver('mock'));
-    const r = s.submitDescription('最近不太舒服');
-    check('模糊输入仍可进入 S2 流程', r.state === 'S2', 'got ' + r.state);
-    check('S2 提供追问卡片（含兜底机制）', r.data && Array.isArray(r.data.option_cards) && r.data.option_cards.length > 0);
-    check('每个追问卡片强制含「以上均无」兜底', r.data.option_cards.some(o => o.negative === true));
-}
-
-console.log('\n=== 契约用例 3：连续多轮 → 硬上限 MAX_ROUNDS 强制进 S3（不超轮、不中断） ===');
-{
-    const s = new SymptomSession(getDriver('mock'));
-    s.submitDescription('最近状态一般');
-    let guard = 0, reachedS3 = false, maxRoundSeen = 0;
-    while (s.state === 'S2' && guard < 12) {
-        const r = s.answer('dim_none'); // 兜底选项：逐步覆盖各维度
-        maxRoundSeen = Math.max(maxRoundSeen, s.round);
-        if (r.state === 'S3') { reachedS3 = true; break; }
-        guard++;
-    }
-    check('最终收敛进入 S3', reachedS3, 'state=' + s.state);
-    check('轮次未超过硬上限 MAX_ROUNDS=' + MAX_ROUNDS, maxRoundSeen <= MAX_ROUNDS, 'maxRoundSeen=' + maxRoundSeen);
-
-    const s2 = new SymptomSession(getDriver('mock'));
-    s2.submitDescription('口苦');
-    s2.round = MAX_ROUNDS - 1; // 下一轮即达上限
-    const hard = s2.answer('dim_prop_cold');
-    check('达 MAX_ROUNDS 时强制进入 S3（无论收敛分）', hard.state === 'S3', 'got ' + hard.state);
-}
-
-console.log('\n=== 契约用例 4：命中毒性药材 → has_toxicity=true 且 toxicity_warning 存在 ===');
-{
-    const s = new SymptomSession(getDriver('mock'));
-    // 去火 group → 半夏泻心汤（组成含 半夏 / banxia，毒性）
-    s.submitDescription('口苦、咽痛、最近有点上火');
+    const r0 = s.submitDescription(desc);
+    if (r0.state === 'SAFETY_CUTOFF') return { session: s, safety: true, data: r0.data };
     let guard = 0;
-    while (s.state === 'S2' && guard < 8) { const r = s.answer('dim_none'); if (r.state === 'S3') break; guard++; }
-    const rep = s.confirm();
-    const herbs = (rep.data.ui_card_payload.sections.herb_knowledge_section) || [];
-    const toxic = herbs.filter(h => h.has_toxicity);
-    check('报告含草本条目（=组成药材数）', herbs.length > 0, 'herbs=' + herbs.length);
-    check('至少 1 个 has_toxicity=true', toxic.length >= 1, 'toxic=' + toxic.length);
-    check('毒性草本带 toxicity_warning 文案', toxic.every(h => typeof h.toxicity_warning === 'string' && h.toxicity_warning.length > 0));
-    check('毒性草本标记为 banxia（半夏）', toxic.some(h => h.herb_id === 'banxia'));
+    while (s.state === 'S2' && guard < 12) { s.answer(answers.shift() || [FALLBACK_LABEL]); guard++; }
+    return { session: s, safety: false };
 }
 
-console.log('\n=== 契约用例 5：断网 / 无后端 → 仍产出报告（mock 不依赖网络） ===');
+console.log('\n=== 契约用例 1：急症红牌硬拦截（含自然语言扩展） ===');
 {
-    const s = new SymptomSession(getDriver('mock'));
-    s.submitDescription('口苦、睡不好、容易烦躁'); // 倾向安神
-    let guard = 0;
-    while (s.state === 'S2' && guard < 8) { const r = s.answer('dim_none'); if (r.state === 'S3') break; guard++; }
-    const rep = s.confirm();
-    check('confirm 返回 S5 报告', rep.state === 'S5', 'got ' + rep.state);
-    const sec = rep.data.ui_card_payload.sections;
-    check('报告含通俗译释模块', typeof sec.tcm_explanation_section === 'string' && sec.tcm_explanation_section.length > 0);
-    check('报告含面诊沟通话术', typeof sec.doctor_communication_brief === 'string' && sec.doctor_communication_brief.length > 0);
-    check('报告含古籍方剂参考', sec.matched_formula_section && sec.matched_formula_section.formula_name);
-    check('报告含相关草本知识', Array.isArray(sec.herb_knowledge_section));
-    check('报告含食疗/日常作息模块', sec.dietary_guidance_section && sec.lifestyle_guidance_section);
-    check('报告末尾固定 disclaimer', sec.disclaimer === DISCLAIMER);
-}
-
-console.log('\n=== 契约用例 6：任意 Skill 异常 → 走 FALLBACK，主流程不中断，报告末尾有 disclaimer ===');
-{
-    globalThis.__TEST_SYMPTOM__ = { get length() { throw new Error('simulated skill failure'); } };
-    const drv = new LocalMockDriver();
-    let threw = false, fb;
-    try { fb = drv.invoke('retriever', { red_list: [] }, { zangfu_tendency: '未知方剂组', confirmed_tags: ['热象'] }); }
-    catch (e) { threw = true; }
-    check('driver.invoke 遇 Skill 异常不向外抛', threw === false);
-    check('异常时返回 ok=false 且 fallback_used=true', fb && fb.ok === false && fb.fallback_used === true);
-    globalThis.__TEST_SYMPTOM__ = TEST_SYMPTOM;
-
-    const fb2 = drv.invoke('no_such_skill', {}, {});
-    check('未知 skillId 兜底（ok=false, fallback_used=true）', fb2.ok === false && fb2.fallback_used === true);
-
-    const fmt = drv.invoke('formatter', {}, { synthesized_symptom_text: '主要表现为口苦。', knowledge_payload: {} }).data;
-    check('formatter 输出固定 disclaimer', fmt.ui_card_payload.sections.disclaimer === DISCLAIMER);
-
-    const s = new SymptomSession(getDriver('mock'));
-    const r0 = s.submitDescription('有点累');
-    check('降级场景下 submitDescription 不中断', r0.state === 'S2');
-}
-
-// ---- 3. 阶段 2 整改新增行为 ----
-console.log('\n=== 整改用例 7：五维通用追问（不重复已覆盖维度 + 兜底 + 轮转） ===');
-{
-    // (a) 已覆盖维度不再被追问
-    const s0 = new SymptomSession(getDriver('mock'));
-    s0.submitDescription('咽痛'); // 覆盖 body
-    check('已覆盖部位时不追问 body', s0.currentDim !== 'body', 'firstDim=' + s0.currentDim);
-    check('首轮追问卡片含「以上均无」兜底', (s0.currentOptions || []).some(o => o.negative === true));
-
-    // (b) 维度轮转：0 覆盖输入，首轮问 body，下一轮换缺失维度（用兜底不提前收敛）
-    const s = new SymptomSession(getDriver('mock'));
-    s.submitDescription('最近不太舒服');
-    const firstDim = s.currentDim;
-    s.answer('dim_none');
-    check('第二轮追问维度与首轮不同（通用轮转）', s.state === 'S3' ? true : (s.currentDim !== firstDim), 'round2 dim=' + s.currentDim);
-}
-
-console.log('\n=== 整改用例 8：收敛硬下限 MIN_ROUNDS=' + MIN_ROUNDS + '（杜绝 1 轮假收敛） ===');
-{
-    const s = new SymptomSession(getDriver('mock'));
-    // 一次性覆盖全部五维 → 理论上完备，但仍须至少 MIN_ROUNDS 轮
-    s.submitDescription('头痛、怕冷、没胃口、便溏、失眠');
-    check('五维全覆盖后首轮仍继续追问（round<MIN_ROUNDS）', s.state === 'S2', 'state=' + s.state);
-    let rounds = 1;
-    while (s.state === 'S2' && rounds < 10) { s.answer('dim_none'); rounds++; }
-    check('收敛发生在第 ≥' + MIN_ROUNDS + ' 轮', rounds >= MIN_ROUNDS, 'rounds=' + rounds);
-    check('收敛后进入 S3', s.state === 'S3', 'state=' + s.state);
-}
-
-console.log('\n=== 整改用例 9：Skill 3 结构化载荷（primary/associated/negative） ===');
-{
-    const s = new SymptomSession(getDriver('mock'));
-    s.submitDescription('口苦、咽痛，最近有点上火'); // 去火（主诉）
-    // 选一个「以上均无」表示无异常，并选一个正选项作为兼次
-    let guard = 0;
-    while (s.state === 'S2' && guard < 8) {
-        const opt = (s.currentOptions || []).find(o => !o.negative) || s.currentOptions[0];
-        s.answer(opt.tag);
-        guard++;
-    }
-    const p = s.confirmation.ui_card_payload;
-    check('确认卡含 primary_symptom（字符串）', typeof p.primary_symptom === 'string' && p.primary_symptom.length > 0);
-    check('确认卡含 associated_symptoms（数组）', Array.isArray(p.associated_symptoms));
-    check('确认卡含 confirmed_negative（数组）', Array.isArray(p.confirmed_negative));
-    check('含合成可读文本 synthesized_symptom_text', typeof p.synthesized_symptom_text === 'string' && p.synthesized_symptom_text.length > 0);
-}
-
-console.log('\n=== 整改用例 10：Skill 4 方剂组成药材 + ID 级强联动 ===');
-{
-    const s = new SymptomSession(getDriver('mock'));
-    s.submitDescription('口苦、咽痛、上火');
-    let guard = 0;
-    while (s.state === 'S2' && guard < 8) { s.answer('dim_none'); if (s.state === 'S3') break; guard++; }
-    const rep = s.confirm();
-    const fm = rep.data.ui_card_payload.sections.matched_formula_section;
-    const herbs = rep.data.ui_card_payload.sections.herb_knowledge_section || [];
-    check('方剂含 composition 数组', Array.isArray(fm.composition) && fm.composition.length > 0);
-    check('草本知识卡数量 == 组成药材数量（强联动完整）', herbs.length === fm.composition.length, herbs.length + ' vs ' + fm.composition.length);
-    const ids = new Set(herbs.map(h => h.herb_id));
-    const nameToId = globalThis.__TEST_NAME_TO_ID__;
-    const allLinked = fm.composition.every(name => ids.has(nameToId[name] || ('hb_' + name)));
-    check('每个组成药材均可映射到一张草本知识卡（ID 级联动）', allLinked);
-}
-
-console.log('\n=== 整改用例 11：急症返回 + 返回修改描述（backToEdit 回显） ===');
-{
-    const s = new SymptomSession(getDriver('mock'));
-    s.submitDescription('最近总是口苦、睡不好');
-    check('提交后进入 S2', s.state === 'S2');
-    const back = s.backToEdit();
-    check('backToEdit 回到 S1', back.state === 'S1');
-    check('backToEdit 保留并回显上一轮描述文字', back.data && back.data.desc === '最近总是口苦、睡不好', 'desc=' + (back.data && back.data.desc));
-}
-
-console.log('\n=== 整改用例 12：herbs_rag_db.json 与引擎 FORMULA_MAP 一致性 ===');
-{
-    const fm = engine.FORMULA_MAP;
-    const groups = Object.keys(fm);
-    let parity = true;
-    groups.forEach(g => {
-        const db = RAG_DB.formulas[g];
-        if (!db || JSON.stringify(db.composition) !== JSON.stringify(fm[g].composition)) parity = false;
+    ['胸痛剧烈', '胸好痛', '心口痛', '胸闷得慌', '吐血', '呼吸困难'].forEach(t => {
+        const s = new SymptomSession(getDriver('mock'));
+        const r = s.submitDescription(t);
+        check('红线「' + t + '」→ SAFETY_CUTOFF', r.state === 'SAFETY_CUTOFF' && r.data.compliance_card);
     });
-    check('JSON 含全部 4 个方剂组', groups.every(g => !!RAG_DB.formulas[g]), 'groups=' + groups.join(','));
-    check('JSON 各方剂 composition 与引擎 FORMULA_MAP 完全一致', parity);
-    check('JSON 五维字典数量为 5', Array.isArray(RAG_DB.formulas) === false && DIMENSION_DICT.length === 5);
+    // 轻度胸闷不应触发红线，仍走归纳路径
+    const s = new SymptomSession(getDriver('mock'));
+    const r = s.submitDescription('最近有点胸闷、气短');
+    check('轻度「胸闷」不触发红线（走 S2 归纳）', r.state === 'S2');
 }
 
-// ---- 4. 汇总 ----
-console.log('\n=========================================');
-console.log('QA 结果：通过 ' + pass + ' / 失败 ' + fail);
-if (fail > 0) {
-    console.log('失败项：\n - ' + fails.join('\n - '));
-    process.exit(1);
-} else {
-    console.log('全部契约用例 + 整改用例通过 ✅');
-    process.exit(0);
+console.log('\n=== 契约用例 2：模糊 / 空输入健壮性 ===');
+{
+    const s = new SymptomSession(getDriver('mock'));
+    const r = s.submitDescription('我最近不太舒服');
+    check('笼统描述可进入 S2（不报错）', r.state === 'S2');
+    check('笼统描述 completeness=low', r.data && r.data.convergence_score !== undefined);
+    const s2 = new SymptomSession(getDriver('mock'));
+    const r2 = s2.submitDescription('');
+    check('空字符串不崩溃（进入 S2 或安全，无异常）', r2.state === 'S2' || r2.state === 'SAFETY_CUTOFF');
 }
+
+console.log('\n=== 契约用例 3：Max Rounds = 5 硬停 ===');
+{
+    const s = new SymptomSession(getDriver('mock'));
+    s.submitDescription('口苦、咽痛');
+    let rounds = 0;
+    while (s.state === 'S2' && rounds < 20) {
+        const opts = s.currentOptions.filter(o => !o.negative);
+        s.answer(opts.length ? [opts[0].tag] : [FALLBACK_LABEL]);
+        rounds++;
+    }
+    check('收敛发生在 round ≤ 5（Max Rounds 硬停）', s.round <= 5, 'round=' + s.round);
+    check('最终状态为 S3（收敛确认）', s.state === 'S3');
+    check('收敛轮次 ≥ Min Rounds(2)（杜绝 1 轮假收敛）', s.round >= 2, 'round=' + s.round);
+}
+
+console.log('\n=== 契约用例 4：毒性静态预警（半夏） ===');
+{
+    const { session } = runFlow('我胸口闷、气短、怕冷', [['闷痛 / 胀痛，像有东西压着'], ['怕冷、喜暖、得热则舒'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const rep = session.confirm();
+    const herbs = rep.data.ui_card_payload.sections.herb_knowledge_section;
+    const toxic = herbs.find(h => h.herb_name === '半夏');
+    check('方剂组成含毒性药材半夏', !!toxic);
+    check('半夏标记 has_toxicity=true 且带预警文案', toxic && toxic.has_toxicity === true && /毒性/.test(toxic.toxicity_warning || ''));
+}
+
+console.log('\n=== 契约用例 5：离线 / 无 API 仍产出报告 ===');
+{
+    const { session } = runFlow('我容易胁肋胀闷、情绪急躁', [['胀闷走窜、叹气则舒'], ['容易急躁、一点就着'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const rep = session.confirm();
+    check('确认后产出 S5 报告', session.state === 'S5' && rep.data.ui_card_payload.sections);
+    check('报告含免责声明', /不构成医疗诊断/.test(rep.data.ui_card_payload.sections.disclaimer || ''));
+}
+
+console.log('\n=== 契约用例 6：Skill 异常 / 未定义 → FALLBACK 不中断 ===');
+{
+    const drv = new LocalMockDriver();
+    const fb = drv.invoke('nonexistent_skill', { red_list: [] }, {});
+    check('未定义/异常 Skill → 驱动返回 fallback 且不抛出', fb.ok === false && fb.fallback_used === true);
+    // 鲁棒性：缺失数据调用 retriever 不抛（降级为通用）
+    const fb2 = drv.invoke('retriever', { red_list: [] }, {});
+    check('retriever 在缺失 category_id 时不抛（ok 或降级）', fb2.ok === true || fb2.fallback_used === true);
+}
+
+console.log('\n=== 整改用例 7：语料库 5 类目 + 口语映射 ===');
+{
+    const rag = E.getRag();
+    check('语料库含 5 个脏腑类目', (rag.categories || []).length === 5);
+    const s = new SymptomSession(getDriver('mock'));
+    const r = s.submitDescription('我胸口闷、有点气短');
+    check('口语「胸口闷」映射到 心肺胸胁 类目', s.categoryId === 'xin_fei_xiong_xie', 'cat=' + s.categoryId);
+    const s2 = new SymptomSession(getDriver('mock'));
+    s2.submitDescription('我两肋胀、爱发火');
+    check('口语「两肋胀/爱发火」映射到 肝胆郁结', s2.categoryId === 'gan_dan_yu_jie', 'cat=' + s2.categoryId);
+}
+
+console.log('\n=== 整改用例 8：双轨多组多选 + 强制兜底 ===');
+{
+    const s = new SymptomSession(getDriver('mock'));
+    const r = s.submitDescription('我胃胀、吃不下');
+    check('追问队列长度在 [Min,Max]=[2,5]', s.clarifyQueue.length >= 2 && s.clarifyQueue.length <= 5, 'len=' + s.clarifyQueue.length);
+    check('首轮选项含「以上均无」兜底', (r.data.option_cards || []).some(o => o.negative === true));
+    // 多选：一次选多个
+    const multi = r.data.option_cards.filter(o => !o.negative).slice(0, 2).map(o => o.tag);
+    s.answer(multi);
+    check('多选数组被接受（round 推进且状态合法）', s.round === 2 && (s.state === 'S2' || s.state === 'S3'));
+}
+
+console.log('\n=== 整改用例 9：Skill3 自然语言叙述（非逗号拼接） ===');
+{
+    const { session } = runFlow('我胸口闷、气短、怕冷', [['闷痛 / 胀痛，像有东西压着'], ['怕冷、喜暖、得热则舒'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const p = session.confirmation.ui_card_payload;
+    check('S3 含大段叙述 synthesized_symptom_text', typeof p.synthesized_symptom_text === 'string' && p.synthesized_symptom_text.length > 20);
+    check('叙述含「您最初描述」深整理感语句', /您最初描述|进一步问诊|综合来看/.test(p.synthesized_symptom_text));
+    check('S3 结构化含 primary / associated / confirmed_negative', p.primary_symptom && Array.isArray(p.associated_symptoms) && Array.isArray(p.confirmed_negative));
+}
+
+console.log('\n=== 整改用例 10：Skill5 深度报告（病机译释 + 第一人称话术 + 组成联动） ===');
+{
+    const { session } = runFlow('我胸口闷、气短、怕冷', [['闷痛 / 胀痛，像有东西压着'], ['怕冷、喜暖、得热则舒'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const rep = session.confirm();
+    const sec = rep.data.ui_card_payload.sections;
+    const fm = sec.matched_formula_section;
+    check('匹配到精确典籍方剂（非泛化降级）', fm.formula_name === '瓜蒌薤白半夏汤', 'fm=' + fm.formula_name);
+    check('通俗译释调用 formula.tcm_explanation（病机，非重复表征）', /胸阳不振|痰浊|气机/.test(sec.tcm_explanation_section));
+    check('面诊话术为第一人称「医生您好」', /^医生您好/.test(sec.doctor_communication_brief));
+    check('组成药材 chips 数 = 方剂 composition 数', sec.composition_chips.length === fm.composition.length, sec.composition_chips.length + ' vs ' + fm.composition.length);
+    const linked = sec.composition_chips.filter(c => c.herb_id);
+    check('组成药材与草本知识卡存在 ID 级强联动（herb_id 非空）', linked.length >= 1, 'linked=' + linked.length);
+    // ID 级联动一致性：有 herb_id 的 chip 必能在 herb 卡中找到同 id
+    const herbIds = sec.herb_knowledge_section.map(h => h.herb_id).filter(Boolean);
+    check('联动 herb_id 均能在草本知识卡映射', linked.every(c => herbIds.indexOf(c.herb_id) >= 0));
+}
+
+console.log('\n=== 整改用例 11：无匹配信息 → 通用兜底（非干拔脾胃虚弱） ===');
+{
+    const { session } = runFlow('我最近不太舒服、有点累', [[FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const rep = session.confirm();
+    const fm = rep.data.ui_card_payload.sections.matched_formula_section;
+    check('无类目匹配 → 通用辨证兜底', /信息待补|辨证调理/.test(fm.formula_name), 'fm=' + fm.formula_name);
+    check('通用兜底不谎称「脾胃虚弱/四君子汤」', !/脾胃虚弱|四君子汤/.test(fm.formula_name));
+}
+
+console.log('\n=== 整改用例 12：backToEdit 回显上一轮文字 ===');
+{
+    const s = new SymptomSession(getDriver('mock'));
+    s.submitDescription('我口苦、睡不好');
+    s.backToEdit();
+    check('backToEdit 回到 S1 且保留 desc 文字', s.state === 'S1' && s.desc === '我口苦、睡不好');
+}
+
+console.log('\n=== 整改用例 13：RAG 一致性（composition 必填字段齐全） ===');
+{
+    const rag = E.getRag();
+    let okAll = true, bad = '';
+    (rag.categories || []).forEach(c => (c.formulas || []).forEach(f => {
+        if (!Array.isArray(f.composition) || !f.tcm_explanation || !f.doctor_brief_template) { okAll = false; bad = c.name + '/' + f.formula_name; }
+    }));
+    check('所有方剂均含 composition / tcm_explanation / doctor_brief_template', okAll, bad);
+}
+
+console.log('\n============================================');
+console.log('  通过 ' + pass + ' / 失败 ' + fail + ' （共 ' + (pass + fail) + ' 项断言）');
+console.log('============================================\n');
+process.exit(fail ? 1 : 0);

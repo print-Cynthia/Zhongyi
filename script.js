@@ -798,32 +798,49 @@ function symptomSubmit() {
     renderSymptomState('S2', res.data);
 }
 
-// S2 细节追问（动态，来自 LocalMockDriver · 五维通用引擎）
+// S2 细节追问（双轨多组 · 多选 Checkbox · 每卡强制兜底）
 function renderS2HTML(data) {
-    const cards = (data.option_cards || []).map(c =>
-        `<span class="tag-pill" role="button" tabindex="0" onclick="symptomAnswer('${c.tag}', this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();symptomAnswer('${c.tag}', this);}">${c.label}</span>`
-    ).join('');
+    const opts = (data.option_cards || []).map(c => `
+        <label class="clarify-opt${c.negative ? ' clarify-neg' : ''}">
+            <input type="checkbox" data-tag="${c.tag}" onchange="toggleClarify(this)">
+            <span>${c.label}</span>
+        </label>`).join('');
     return `
         <div class="fade-in">
-            <h2 style="text-align:center; margin-bottom:24px">为了更准确，请补充细节</h2>
+            <h2 style="text-align:center; margin-bottom:8px">补充细节（可多选）</h2>
+            <p style="text-align:center; color:var(--text-muted); font-size:13px; margin-bottom:24px">${data.ask_track === 'T1' ? '主诉深度细化' : (data.ask_track === 'T2' ? '《十问篇》基础盘查' : '补充问诊')} · 第 ${symptomSession.round} 轮</p>
             <div style="max-width:600px; margin:0 auto">
                 <p style="font-weight:700; margin-bottom:16px; font-size:16px">${data.question_text || ''}</p>
-                <div style="display:flex; gap:12px; flex-wrap:wrap" id="clarify-cards">${cards}</div>
-                <div style="margin-top:20px">
+                <div id="clarify-cards" style="display:flex; flex-direction:column; gap:12px">${opts}</div>
+                <div style="margin-top:24px; display:flex; gap:16px; align-items:center; justify-content:center">
+                    <button class="search-button" onclick="symptomAnswerMulti()">确认选择</button>
                     <button class="ghost-btn" type="button" onclick="symptomBackToEdit()">← 返回修改描述</button>
                 </div>
-                <p style="font-size:12px; color:var(--text-muted); margin-top:16px">（第 ${symptomSession.round} 轮 · 收敛分 ${data.convergence_score}）</p>
+                <p style="font-size:12px; color:var(--text-muted); margin-top:16px; text-align:center">收敛分 ${data.convergence_score} · 无对应情况请勾选「以上均无」</p>
             </div>
         </div>
     `;
 }
-function symptomAnswer(tag, el) {
-    if (symptomClarifyLocked) return;
-    symptomClarifyLocked = true;
-    // 选项卡片防重复点击：禁用整组
+// 多选排他：勾选兜底项则清空其它；勾选其它则清空兜底
+function toggleClarify(box) {
     const group = document.getElementById('clarify-cards');
-    if (group) group.querySelectorAll('.tag-pill').forEach(t => { t.style.pointerEvents = 'none'; t.style.opacity = '0.55'; });
-    const res = symptomSession.answer(tag);
+    if (!group) return;
+    const boxes = group.querySelectorAll('input[type=checkbox]');
+    if (box.classList.contains('clarify-neg') || (box.parentElement && box.parentElement.classList.contains('clarify-neg'))) {
+        if (box.checked) boxes.forEach(b => { if (b !== box) b.checked = false; });
+    } else {
+        boxes.forEach(b => { if ((b.parentElement && b.parentElement.classList.contains('clarify-neg')) || b.classList.contains('clarify-neg')) b.checked = false; });
+    }
+}
+// S2 多选提交
+function symptomAnswerMulti() {
+    if (symptomClarifyLocked) return;
+    const group = document.getElementById('clarify-cards');
+    if (!group) return;
+    const tags = Array.from(group.querySelectorAll('input[type=checkbox]:checked')).map(b => b.getAttribute('data-tag'));
+    if (!tags.length) { alert('请至少选择一项；若无对应情况，请勾选「以上均无」。'); return; }
+    symptomClarifyLocked = true;
+    const res = symptomSession.answer(tags);
     if (res.state === 'S2') renderSymptomState('S2', res.data);
     else if (res.state === 'S3') renderSymptomState('S3', res.data);
     symptomClarifyLocked = false;
@@ -952,8 +969,9 @@ function renderS5HTML(data) {
                 <div class="report-content"><ul style="margin:0; padding-left:18px; line-height:1.9">${habitItems}</ul></div>
             </div>
 
-            <div style="margin-top:48px; display:flex; gap:16px; justify-content:center">
-                <button class="search-button" onclick="copyReport()">复制报告</button>
+            <div style="margin-top:48px; display:flex; gap:16px; justify-content:center; flex-wrap:wrap">
+                <button class="search-button" onclick="exportReportImage()">导出 / 复制为报告长图</button>
+                <button class="ghost-btn" onclick="copyReport()">复制文字报告</button>
                 <button class="ghost-btn" onclick="symptomRestart()">重新整理</button>
             </div>
 
@@ -974,6 +992,37 @@ function focusHerb(id) {
     }
 }
 function symptomRestart() { symptomResetAndRender(); }
+
+// 导出 / 复制为报告长图（html2canvas → PNG；优先写入剪贴板，否则下载）
+function exportReportImage() {
+    const card = document.querySelector('#symptom-step-container .report-card');
+    if (!card) { alert('报告尚未生成'); return; }
+    if (typeof html2canvas === 'undefined') { alert('图片导出库未加载，请检查网络后重试'); return; }
+    const btn = event && event.target;
+    const oldText = btn ? btn.textContent : '';
+    if (btn) { btn.textContent = '正在生成图片...'; btn.disabled = true; }
+    html2canvas(card, { backgroundColor: '#ffffff', scale: 2, useCORS: true, logging: false }).then(function (canvas) {
+        canvas.toBlob(function (blob) {
+            if (blob && navigator.clipboard && window.ClipboardItem) {
+                navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+                    .then(function () { if (btn) { btn.textContent = '已复制长图到剪贴板'; } setTimeout(function () { if (btn) { btn.textContent = oldText; btn.disabled = false; } }, 2000); })
+                    .catch(function () { downloadCanvas(canvas, oldText, btn); });
+            } else {
+                downloadCanvas(canvas, oldText, btn);
+            }
+        }, 'image/png');
+    }).catch(function () {
+        alert('图片生成失败，请重试');
+        if (btn) { btn.textContent = oldText; btn.disabled = false; }
+    });
+}
+function downloadCanvas(canvas, oldText, btn) {
+    const a = document.createElement('a');
+    a.href = canvas.toDataURL('image/png');
+    a.download = '身体信号整理报告.png';
+    a.click();
+    if (btn) { btn.textContent = '长图已下载'; setTimeout(function () { if (btn) { btn.textContent = oldText; btn.disabled = false; } }, 2000); }
+}
 
 // 复制面诊话术（取自 Skill 5 输出，不依赖 DOM 抓取）
 function copyDoctorBrief() {

@@ -1234,6 +1234,28 @@ input:checked + .checkbox-box {
 .sc-list.sc-negative { color: var(--text-muted); }
 .sc-note { font-size: 14px; color: var(--text-main); line-height: 1.7; border-top: 1px dashed var(--border-color); padding-top: 14px; }
 
+/* 阶段 3 新增：双轨多组追问 · 多选 Checkbox 卡片 */
+.clarify-opt {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: #fff;
+    font-size: 15px;
+    color: var(--text-main);
+    cursor: pointer;
+    transition: all 0.18s;
+}
+.clarify-opt:hover { border-color: var(--primary-green); background: var(--light-green-bg); }
+.clarify-opt input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--primary-green); cursor: pointer; flex: none; }
+.clarify-opt.clarify-neg { color: var(--text-muted); font-style: italic; border-style: dashed; }
+.clarify-opt.clarify-neg:hover { background: #F9FAFB; border-color: var(--border-color); }
+
+/* 详情页层级硬化（确保置于内容之上，无重叠） */
+#detail-section { position: relative; z-index: 60; }
+
 /* 阶段 2.5 新增：古籍方剂组成药材 + ID 级强联动 */
 .formula-composition { margin-top: 16px; }
 .fc-label { font-size: 12px; font-weight: 700; color: var(--primary-green); margin-bottom: 8px; }

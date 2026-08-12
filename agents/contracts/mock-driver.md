@@ -24,22 +24,25 @@
 - 例：`肚子涨 / 腹胀` → 食后腹胀(消化, 0.9)；`口苦` → 口苦(寒热, 0.85)；`睡不着` → 入睡困难(睡眠, 0.9)。
 - `missing_dimensions` = 五维中未命中者；`overall_completeness` 按命中维度数映射 low / medium / high。
 
-### Skill 2 · Clarifier（mock · 五维通用）
-- 通用五维字典 `DIMENSION_DICT = [部位 | 性质寒热 | 饮食 | 二便 | 睡眠]`；extractor 标记 `covered_dimensions` / `missing_dimensions`。
-- 仅对**缺失维度**动态拼装追问卡片（已覆盖维度绝不重复追问），每个卡片**强制追加** `[以上均无 / 无上述情况]` 兜底选项，绝不强迫硬选。
-- **收敛分公式**：`Score = 0.3 + 0.15 * 已覆盖维度数 + 0.1 * Round`；**硬下限 `MIN_ROUNDS = 2`**：`Round < 2` 必继续，否则 `Score ≥ 0.85 且 Round < 5` 才收敛 → 强制 2~3 轮维度补全，杜绝「1 轮假收敛」。
+### Skill 2 · Clarifier（mock · 双轨多组 + 多选）
+- 读取 `database/herbs_rag_db.json`：extractor 先用 `oral_synonyms` 做口语→标准映射、命中类目（`detected_category`）并标记 `covered_dimensions` / `missing_dimensions`。
+- **双轨多组**：轨 1（主诉深度细化）= 类目 `depth_prompts` 按维度拆分；轨 2（《十问篇》基础盘查）= `global_inquiry` 仅盘查初始未覆盖维度。问题**严格按维度拆分**（绝不许寒热与痛感混一问），选项为**多选（Checkbox）**，每组**强制追加** `[以上且无 / 无上述情况]` 兜底，绝不强迫硬选。
+- **收敛分公式**：`Score = 0.3 + 0.15 * 已覆盖维度数 + 0.1 * Round`；**硬下限 `MIN_ROUNDS = 2`**：`Round < 2` 必继续，否则 `Round < 5` 才收敛 → 强制 2~3 轮维度补全，杜绝「1 轮假收敛」。
 
-### Skill 3 · Synthesizer（mock · 结构化）
-- 输出结构化 JSON（非逗号拼接）：`primary_symptom`（核心表现）、`associated_symptoms[]`（兼带细节）、`confirmed_negative[]`（已排除 / 无异常），并附 `synthesized_symptom_text` 可读串，供前端渲染结构化确认卡。
+### Skill 3 · Synthesizer（mock · 自然语言叙述 + 结构化）
+- 输出**自然语言大段叙述** `synthesized_symptom_text`（含「您最初描述 / 进一步问诊 / 综合来看」深整理感），并附结构化 JSON：`primary_symptom`、`associated_symptoms[]`、`confirmed_negative[]`，供前端渲染结构化确认卡。
 
 ### Skill 4 · Retriever（mock · 组成药材强联动）
-- 静态 RAG 库 `herbs_rag_db.json`（与 `FORMULA_MAP.composition` 保持一致）：每个古籍方剂含必填 `composition: string[]`（组成药材名）。
-- 按 `zangfu_tendency`（综合自由描述命中关键词 + 维度选项推断）匹配方剂，返回 `matched_formula.composition`（组成药材名）与 `matched_herbs`（药材名解析为 `herb_id`，与组成药材 **ID 级强联动**映射）。
-- **毒性**：命中 `toxicity_list`（如半夏 / banxia）→ 插入 `toxicity_warning`（静态，无条件）。
-- **空匹配** → 通用「健脾理气 / 温和调理方向」兜底（`composition` 为空数组）。
+- 静态 RAG 库 `database/herbs_rag_db.json`（PRD §3.3 三大层级，5 类目）：每个古籍方剂含必填 `composition: string[]`（组成药材名）、`tcm_explanation`、`doctor_brief_template`。
+- 按 `detected_category` 精确匹配主方（非干拔「脾胃虚弱 / 四君子汤」）；返回 `matched_formula.composition` 与 `matched_herbs`（组成药材名解析为 `herb_id`，与下方草本知识卡 **ID 级强联动**映射）。
+- **毒性**：命中 `TOXIC_HERBS`（如半夏 / banxia）→ 插入 `toxicity_warning`（静态，无条件）。
+- **无类目匹配** → 通用「辨证调理（信息待补）」兜底（`composition` 为空数组），不谎称特定方剂。
 
 ### Skill 5 · Formatter（mock）
-- 聚合上面所有 payload → 8 模块报告 JSON；`disclaimer` 固定文本从 `compliance-rules.md` §1 注入。
+- 聚合上面所有 payload → 8 模块报告 JSON：`disclaimer` 固定文本从 `compliance-rules.md` §1 注入。
+- **通俗译释**：优先使用 `matched_formula.tcm_explanation`（病机译释，严禁重复表征）。
+- **面诊沟通话术**：使用 `doctor_brief_template` 填充为**患者第一人称口吻**（含起病时间 `{{onset}}`、主要不适 `{{primary}}`、加重因素 `{{aggravating_note}}`），方便直接出示给医生。
+- 组成药材 chips 与草本知识卡经 `herb_id` 形成 **ID 级强联动**（点击 chip 定位并高亮对应草本卡）。
 - 通俗解读用模板填充，**不自由生成**。
 
 ---
