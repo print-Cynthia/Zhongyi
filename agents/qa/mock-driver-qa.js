@@ -73,6 +73,85 @@ console.log('\n=== 整改用例 15：部位信号容错层（自然语言任意�
         'cat=' + s.categoryId + ' opts=' + (s.currentOptions || []).map(o => o.label).join('/'));
 }
 
+console.log('\n=== 整改用例 16：CPO 词库扩充校验（新增部位 / 口语变体命中专病类目） ===');
+{
+    const drv = new LocalMockDriver();
+    const cases = [
+        // 心肺胸胁
+        ['胸痛', 'xin_fei_xiong_xie'],
+        ['我左胸痛', 'xin_fei_xiong_xie'],
+        ['右胸有点不舒服', 'xin_fei_xiong_xie'],
+        ['后背发紧', 'xin_fei_xiong_xie'],
+        ['一口气喘不上来', 'xin_fei_xiong_xie'],
+        ['胸口像压了块石头', 'xin_fei_xiong_xie'],
+        ['心跳得快', 'xin_fei_xiong_xie'],
+        ['心砰砰跳', 'xin_fei_xiong_xie'],
+        ['胸口隐隐作痛', 'xin_fei_xiong_xie'],
+        ['有点喘', 'xin_fei_xiong_xie'],
+        ['呼吸不上来', 'xin_fei_xiong_xie'],
+        // 肝胆郁结
+        ['乳房胀痛', 'gan_dan_yu_jie'],
+        ['肋下疼', 'gan_dan_yu_jie'],
+        ['两肋胀', 'gan_dan_yu_jie'],
+        ['头顶胀痛', 'gan_dan_yu_jie'],
+        ['太阳穴跳痛', 'gan_dan_yu_jie'],
+        ['我特别爱发火', 'gan_dan_yu_jie'],
+        ['烦躁不安', 'gan_dan_yu_jie'],
+        ['郁闷', 'gan_dan_yu_jie'],
+        ['心里憋屈', 'gan_dan_yu_jie'],
+        ['嘴巴苦', 'gan_dan_yu_jie'],
+        ['口苦咽干', 'gan_dan_yu_jie'],
+        // 脾胃运化
+        ['胃部隐痛', 'pi_wei_yun_hua'],
+        ['肠胃不舒服', 'pi_wei_yun_hua'],
+        ['下腹坠胀', 'pi_wei_yun_hua'],
+        ['小肚腩坠胀', 'pi_wei_yun_hua'],
+        ['腹胀', 'pi_wei_yun_hua'],
+        ['反酸烧心', 'pi_wei_yun_hua'],
+        ['打嗝嗳气', 'pi_wei_yun_hua'],
+        ['恶心想吐', 'pi_wei_yun_hua'],
+        ['反胃', 'pi_wei_yun_hua'],
+        ['口黏口腻', 'pi_wei_yun_hua'],
+        ['大便黏马桶', 'pi_wei_yun_hua'],
+        ['肚子咕噜响', 'pi_wei_yun_hua'],
+        ['经常拉肚子', 'pi_wei_yun_hua'],
+        // 肾系水液
+        ['腰杆酸痛', 'shen_xi_shui_ye'],
+        ['膝盖酸软', 'shen_xi_shui_ye'],
+        ['脚跟疼', 'shen_xi_shui_ye'],
+        ['眼袋重', 'shen_xi_shui_ye'],
+        ['我脚肿了', 'shen_xi_shui_ye'],
+        ['腰痛', 'shen_xi_shui_ye'],
+        ['手脚冰凉', 'shen_xi_shui_ye'],
+        ['怎么也暖不热', 'shen_xi_shui_ye'],
+        ['腰凉', 'shen_xi_shui_ye'],
+        ['经常起夜', 'shen_xi_shui_ye'],
+        ['黑眼圈重', 'shen_xi_shui_ye'],
+        ['没精神', 'shen_xi_shui_ye'],
+        ['容易累', 'shen_xi_shui_ye'],
+        // 外感表证
+        ['嗓子眼痒', 'biao_zheng_wai_gan'],
+        ['喉咙口有痰', 'biao_zheng_wai_gan'],
+        ['后脑勺疼', 'biao_zheng_wai_gan'],
+        ['浑身肌肉酸痛', 'biao_zheng_wai_gan'],
+        ['像感冒了', 'biao_zheng_wai_gan'],
+        ['风一吹就难受', 'biao_zheng_wai_gan'],
+        ['浑身发冷', 'biao_zheng_wai_gan'],
+        ['打冷颤', 'biao_zheng_wai_gan'],
+        ['嗓子咽唾沫疼', 'biao_zheng_wai_gan'],
+        ['嗓子冒火', 'biao_zheng_wai_gan'],
+        ['头重脚轻', 'biao_zheng_wai_gan']
+    ];
+    let ok = 0;
+    cases.forEach(([t, expect]) => {
+        const ext = drv.invoke('extractor', {}, { user_raw_input: t }).data;
+        const pass = ext.detected_category === expect;
+        if (pass) ok++;
+        check('词库扩充：「' + t + '」→ ' + expect, pass, 'got=' + ext.detected_category);
+    });
+    check('词库扩充：全部 ' + cases.length + ' 例命中正确类目', ok === cases.length, ok + '/' + cases.length);
+}
+
 console.log('\n=== 契约用例 2：模糊 / 空输入健壮性 ===');
 {
     const s = new SymptomSession(getDriver('mock'));

@@ -6,7 +6,7 @@
  *   - 状态机 S0~S6 的编排（Min Rounds=2 硬下限 / Max Rounds=5 硬停 / 红线切断 / 降级）
  *   - getDriver('mock'|'cloud') 可插拔接缝：未来切 CloudAPIDriver 业务代码零改动
  *
- * 5D 推理矩阵（CPO 终极指令 v1.43 注入）+ 部位信号容错层（v1.44：region_keywords×symptom_signals 自然语言容错）：
+ * 5D 推理矩阵（CPO 终极指令 v1.43 注入）+ 部位信号容错层（v1.44：region_keywords×symptom_signals 自然语言容错）+ 词库全量扩充（v1.45：CPO 指令补齐 5 类 region_keywords/oral_synonyms，覆盖程度副词/方言/俗语变体，语料库 version 1.3）：
  *   - 双轨追问：轨1 主诉专病细化（depth_prompts）→ 完备度<0.85 平滑进入轨2《十问篇》(global_inquiry)
  *   - 加权矩阵：Score = Σ专病Tag×25 + Σ十问Tag×15 − Σ相克Tag×20，遍历全部方剂取 Top1 与脏腑方向
  *   - 永远产出倾向性结论（严禁「信息待补」），score<25 标记 low_confidence
