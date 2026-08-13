@@ -46,6 +46,33 @@ console.log('\n=== 契约用例 1：Safety Shield 红牌词库（CPO 删减指�
     check('Safety Shield 函数仍存在且对空词表返回不拦截', sh.ok === true && sh.data.blocked === false);
 }
 
+console.log('\n=== 整改用例 15：部位信号容错层（自然语言任意表述触发专病类目） ===');
+{
+    // 直接校验 Extractor：部位信号 + 症状信号组合，应检出对应专病类目（不再依赖完整词命中）
+    const drv = new LocalMockDriver();
+    const cases = [
+        ['我的胸很痛', 'xin_fei_xiong_xie'],
+        ['胸口有点儿疼', 'xin_fei_xiong_xie'],
+        ['我胃特别痛', 'pi_wei_yun_hua'],
+        ['胁肋胀得慌', 'gan_dan_yu_jie'],
+        ['腰很酸、怕凉', 'shen_xi_shui_ye'],
+        ['我有点咳嗽、喉咙痛', 'biao_zheng_wai_gan']
+    ];
+    cases.forEach(([t, expect]) => {
+        const ext = drv.invoke('extractor', {}, { user_raw_input: t }).data;
+        check('部位信号容错：「' + t + '」→ 检出 ' + expect, ext.detected_category === expect, 'got=' + ext.detected_category);
+    });
+    // 端到端：submitDescription 后首轮追问应为专病「痛感性质」而非通用十问
+    const s = new SymptomSession(getDriver('mock'));
+    const r = s.submitDescription('我的胸很痛');
+    check('「我的胸很痛」进入 S2', r.state === 'S2');
+    check('首轮追问为心肺专病（含刺痛/闷痛等性质选项）',
+        s.categoryId === 'xin_fei_xiong_xie' &&
+        Array.isArray(s.currentOptions) &&
+        s.currentOptions.some(o => /刺痛|闷痛|绞痛|隐痛/.test(o.label)),
+        'cat=' + s.categoryId + ' opts=' + (s.currentOptions || []).map(o => o.label).join('/'));
+}
+
 console.log('\n=== 契约用例 2：模糊 / 空输入健壮性 ===');
 {
     const s = new SymptomSession(getDriver('mock'));

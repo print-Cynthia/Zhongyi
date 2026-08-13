@@ -14,6 +14,12 @@
  *       incompatible_tags 相克 Tag（命中 ×−20，与本病机相左的 tag）
  *   评分公式：Score = Σ(专病Tag×25) + Σ(十问Tag×15) − Σ(相克Tag×20)，遍历全部方剂取 Top1。
  *
+ * 自然语言容错层（CPO 词库扩充指令）：
+ *   - 每类新增 region_keywords（部位信号：胸/胁/胃/腰/感冒…），Extractor 命中即 +2 并标记 body 维度，
+ *     使「胸很痛 / 胸口有点疼 / 胃特别痛」等任意自然表述都能触发对应专病类目，不再依赖完整词命中。
+ *   - 全局 symptom_signals（痛/疼/胀/闷…）与部位信号组合时再 +1，强化专病指向。
+ *   - oral_synonyms 已扩充程度副词（很/好/有点/特别/十分）× 症状同义（痛/疼/酸痛…）× 部位变体（胸/胸口/胸腔…）。
+ *
  * 如需修改语料，请以 .json 为准（人工可读、供 CPO 评审），并保证本文件与之同步，
  * 质量组 QA 会校验两者一致性（agents/qa/mock-driver-qa.js）。
  */
@@ -23,17 +29,23 @@
 })(typeof self !== 'undefined' ? self : this, function () {
     'use strict';
     return {
-        version: "1.1",
-        desc: "身体信号整理模块 · 中医语料库（PRD §3.3 三大层级 + 5D 推理矩阵 Tag）。Layer1 体征标准化规范表、Layer2 问诊推导逻辑表（十问篇）、Layer3 结构化归纳与草本映射表。",
+        version: "1.2",
+        desc: "身体信号整理模块 · 中医语料库（PRD §3.3 三大层级 + 5D 推理矩阵 Tag + 部位信号容错层）。Layer1 体征标准化规范表、Layer2 问诊推导逻辑表（十问篇）、Layer3 结构化归纳与草本映射表。",
+        // 全局症状信号词：与部位信号（region_keywords）组合判定专病类目，提升自然语言容错
+        symptom_signals: ["痛", "疼", "胀", "闷", "堵", "酸", "麻", "木", "晕", "鸣", "慌", "悸", "促", "短", "乏", "疲", "沉", "肿", "咳", "喘", "呛", "痒", "烧", "坠"],
         categories: [
             {
                 id: "xin_fei_xiong_xie",
                 name: "心肺胸胁",
                 standard_keywords: ["胸胁胀痛", "胸胁刺痛", "胸闷", "心悸", "气短", "咳喘", "心前区不适"],
+                region_keywords: ["胸", "心口", "心前", "胸口", "胸前", "胸腔", "膻中", "心脏", "心窝", "心口窝"],
                 oral_synonyms: [
                     { oral: ["胸好痛", "胸口痛", "心口痛", "胸口闷", "胸闷得慌", "心口堵", "胸口像压着"], standard: "胸胁胀痛", dimension: "body" },
-                    { oral: ["喘不上气", "气不够用", "上不来气", "出气费劲"], standard: "气短", dimension: "body" },
-                    { oral: ["心慌", "心跳快", "心里发慌", "心突突"], standard: "心悸", dimension: "body" }
+                    { oral: ["胸很痛", "胸特别痛", "胸好痛", "胸口很痛", "胸腔痛", "前胸痛", "胸前痛", "胸疼", "胸口疼", "胸部痛", "胸有点痛", "胸有点儿疼", "胸特别疼", "胸部胀痛", "胸刺痛", "胸隐痛", "胸很疼"], standard: "胸胁胀痛", dimension: "body" },
+                    { oral: ["胸很闷", "胸口很闷", "胸闷", "胸口闷", "胸腔闷", "胸堵得慌", "胸口堵", "胸胀", "胸口像压着", "胸口闷得慌", "胸前堵", "胸发闷"], standard: "胸胁胀痛", dimension: "body" },
+                    { oral: ["心口痛", "心口疼", "心前痛", "心窝痛", "心脏痛", "心口闷", "心口堵", "心口像压着", "心口发闷", "心口刺痛"], standard: "胸胁胀痛", dimension: "body" },
+                    { oral: ["喘不上气", "气不够用", "上不来气", "出气费劲", "气短", "喘气急"], standard: "气短", dimension: "body" },
+                    { oral: ["心慌", "心跳快", "心里发慌", "心突突", "心惊", "心悸"], standard: "心悸", dimension: "body" }
                 ],
                 depth_prompts: {
                     pain_nature: {
@@ -93,10 +105,13 @@
                 id: "gan_dan_yu_jie",
                 name: "肝胆郁结",
                 standard_keywords: ["胁肋胀痛", "肝郁气滞", "善太息", "情绪抑郁", "急躁易怒", "乳房胀痛"],
+                region_keywords: ["胁", "肋", "肝", "乳", "两胁", "胁肋", "肋骨", "肝区", "右胁", "少腹"],
                 oral_synonyms: [
                     { oral: ["脾气急", "爱发火", "生闷气", "胸口堵得慌", "两肋胀", "肋骨处胀", "胁肋胀"], standard: "胁肋胀痛", dimension: "body" },
-                    { oral: ["老想叹气", "嗳气", "叹气舒服点"], standard: "善太息", dimension: "body" },
-                    { oral: ["心情压抑", "高兴不起来", "闷闷不乐"], standard: "情绪抑郁", dimension: "emotion" }
+                    { oral: ["胁肋很胀", "两肋胀", "肋骨处胀", "胁肋胀痛", "胁肋有点胀", "肋部疼", "胁痛", "右胁痛", "肝区胀", "乳房胀", "两胁胀痛", "胁肋胀闷", "右胁胀痛", "胁肋刺痛"], standard: "胁肋胀痛", dimension: "body" },
+                    { oral: ["老想叹气", "嗳气", "叹气舒服点", "善太息", "总想叹气"], standard: "善太息", dimension: "body" },
+                    { oral: ["心情压抑", "高兴不起来", "闷闷不乐", "情绪抑郁"], standard: "情绪抑郁", dimension: "emotion" },
+                    { oral: ["脾气很急", "特别爱发火", "容易急躁", "老生气", "肝气不舒", "情志不舒", "一点就着", "急脾气", "动不动就发火"], standard: "急躁易怒", dimension: "emotion" }
                 ],
                 depth_prompts: {
                     emotion: {
@@ -160,11 +175,16 @@
                 id: "pi_wei_yun_hua",
                 name: "脾胃运化",
                 standard_keywords: ["食后腹胀", "食欲不振", "大便溏薄", "胃脘隐痛", "消化不良", "肢体倦怠"],
+                region_keywords: ["胃", "腹", "脾", "脘", "肚脐", "腹部", "肚子", "脘腹", "上腹", "中焦", "心下", "胃脘"],
                 oral_synonyms: [
                     { oral: ["肚子胀", "胃难受", "胃胀", "吃撑了胀", "饭后胀"], standard: "食后腹胀", dimension: "diet" },
+                    { oral: ["肚子很胀", "腹很胀", "胃胀", "吃撑了胀", "饭后胀", "腹部胀", "脘腹胀", "食后腹胀", "肚子胀", "小腹胀", "胃腹胀", "吃一点就胀"], standard: "食后腹胀", dimension: "diet" },
                     { oral: ["吃不下", "没胃口", "不想吃饭", "纳差"], standard: "食欲不振", dimension: "diet" },
+                    { oral: ["吃不下", "没胃口", "不想吃饭", "纳差", "食欲差", "吃得少", "不太想吃东西", "吃饭不香"], standard: "食欲不振", dimension: "diet" },
                     { oral: ["拉肚子", "大便稀", "便溏", "大便不成形"], standard: "大便溏薄", dimension: "excretion" },
-                    { oral: ["胃疼", "胃痛", "胃部隐痛"], standard: "胃脘隐痛", dimension: "body" }
+                    { oral: ["拉肚子", "大便稀", "便溏", "大便不成形", "腹泻", "老拉肚子", "大便偏稀", "一吃凉的就拉"], standard: "大便溏薄", dimension: "excretion" },
+                    { oral: ["胃疼", "胃痛", "胃部隐痛"], standard: "胃脘隐痛", dimension: "body" },
+                    { oral: ["胃很痛", "胃特别痛", "胃很疼", "胃部痛", "上腹痛", "胃脘痛", "心下痛", "胃疼", "胃有点痛", "胃部隐痛", "胃刺痛", "胃脘隐痛", "胃里疼"], standard: "胃脘隐痛", dimension: "body" }
                 ],
                 depth_prompts: {
                     appetite: {
@@ -240,11 +260,16 @@
                 id: "shen_xi_shui_ye",
                 name: "肾系水液",
                 standard_keywords: ["腰膝酸软", "畏寒肢冷", "夜尿频多", "水肿", "精神萎靡", "头晕耳鸣"],
+                region_keywords: ["腰", "膝", "肾", "夜尿", "下肢", "腿软", "脚肿", "眼皮肿", "脸肿", "腰骶", "命门", "小腿"],
                 oral_synonyms: [
                     { oral: ["腰酸", "腰疼", "腰没劲", "腿软", "膝盖软"], standard: "腰膝酸软", dimension: "body" },
+                    { oral: ["腰酸", "腰很酸", "腰疼", "腰部痛", "腰很痛", "腰膝酸软", "腰没劲", "腰膝痛", "腰骶酸", "腰特别酸", "腰眼酸", "后腰疼"], standard: "腰膝酸软", dimension: "body" },
                     { oral: ["怕冷", "手脚凉", "畏寒", "比别人怕冻"], standard: "畏寒肢冷", dimension: "property" },
+                    { oral: ["怕冷", "手脚凉", "畏寒", "比别人怕冻", "特别怕冷", "有点怕冷", "畏寒肢冷", "手脚冰冷"], standard: "畏寒肢冷", dimension: "property" },
                     { oral: ["夜尿多", "起夜", "晚上老上厕所"], standard: "夜尿频多", dimension: "excretion" },
-                    { oral: ["眼皮肿", "脚肿", "脸肿", "水肿"], standard: "水肿", dimension: "body" }
+                    { oral: ["夜尿多", "起夜", "晚上老上厕所", "夜尿频", "夜尿频繁", "起夜两次以上"], standard: "夜尿频多", dimension: "excretion" },
+                    { oral: ["眼皮肿", "脚肿", "脸肿", "水肿"], standard: "水肿", dimension: "body" },
+                    { oral: ["脚肿", "腿肿", "眼皮肿", "脸肿", "下肢肿", "水肿", "小腿肿", "脚踝肿"], standard: "水肿", dimension: "body" }
                 ],
                 depth_prompts: {
                     kidney_symptom: {
@@ -318,12 +343,20 @@
                 id: "biao_zheng_wai_gan",
                 name: "表证外感",
                 standard_keywords: ["恶寒发热", "鼻塞流涕", "咽痛", "头痛", "咳嗽", "身痛无汗"],
+                region_keywords: ["感冒", "着凉", "受风", "鼻塞", "咽痛", "嗓子", "咳嗽", "头痛", "身痛", "发热", "恶寒", "流涕", "打喷嚏", "浑身酸", "喉咙", "额头", "受寒"],
                 oral_synonyms: [
                     { oral: ["感冒", "着凉", "受风", "冻着了"], standard: "表证外感", dimension: "body" },
+                    { oral: ["感冒", "着凉", "受风", "冻着了", "感冒了", "受寒", "吹风着凉", "着了凉"], standard: "表证外感", dimension: "body" },
                     { oral: ["发烧", "发热", "怕冷发热", "忽冷忽热"], standard: "恶寒发热", dimension: "property" },
+                    { oral: ["发烧", "发热", "怕冷发热", "忽冷忽热", "有点发热", "高烧", "发热重", "低烧"], standard: "恶寒发热", dimension: "property" },
                     { oral: ["嗓子疼", "喉咙痛", "嗓子干"], standard: "咽痛", dimension: "body" },
+                    { oral: ["嗓子疼", "喉咙痛", "嗓子干", "咽痛", "喉咙干痒", "嗓子痛", "咽干咽痛"], standard: "咽痛", dimension: "body" },
                     { oral: ["流鼻涕", "鼻塞", "鼻子不通"], standard: "鼻塞流涕", dimension: "body" },
-                    { oral: ["头痛", "脑袋疼", "头晕乎乎"], standard: "头痛", dimension: "body" }
+                    { oral: ["流鼻涕", "鼻塞", "鼻子不通", "鼻涕", "打喷嚏", "鼻子堵", "流清涕"], standard: "鼻塞流涕", dimension: "body" },
+                    { oral: ["头痛", "脑袋疼", "头晕乎乎"], standard: "头痛", dimension: "body" },
+                    { oral: ["头痛", "脑袋疼", "头晕乎乎", "头疼", "后脑勺疼", "头胀痛", "太阳穴疼"], standard: "头痛", dimension: "body" },
+                    { oral: ["浑身酸痛", "身痛", "全身酸", "肌肉酸"], standard: "身痛无汗", dimension: "body" },
+                    { oral: ["浑身酸痛", "身痛", "全身酸", "肌肉酸", "浑身疼", "身体酸痛", "骨节酸疼"], standard: "身痛无汗", dimension: "body" }
                 ],
                 depth_prompts: {
                     fever_pattern: {

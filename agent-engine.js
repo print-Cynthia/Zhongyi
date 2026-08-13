@@ -6,7 +6,7 @@
  *   - 状态机 S0~S6 的编排（Min Rounds=2 硬下限 / Max Rounds=5 硬停 / 红线切断 / 降级）
  *   - getDriver('mock'|'cloud') 可插拔接缝：未来切 CloudAPIDriver 业务代码零改动
  *
- * 5D 推理矩阵（CPO 终极指令 v1.43 注入）：
+ * 5D 推理矩阵（CPO 终极指令 v1.43 注入）+ 部位信号容错层（v1.44：region_keywords×symptom_signals 自然语言容错）：
  *   - 双轨追问：轨1 主诉专病细化（depth_prompts）→ 完备度<0.85 平滑进入轨2《十问篇》(global_inquiry)
  *   - 加权矩阵：Score = Σ专病Tag×25 + Σ十问Tag×15 − Σ相克Tag×20，遍历全部方剂取 Top1 与脏腑方向
  *   - 永远产出倾向性结论（严禁「信息待补」），score<25 标记 low_confidence
@@ -133,7 +133,10 @@
         return { blocked: false, matched_red_flags: [] };
     }
 
-    // Skill 1 · Extractor（口语映射 + 类目命中 + 维度覆盖）
+    // 全局症状信号词（自然语言容错：与部位信号组合判定专病类目）
+    const DEFAULT_SYMPTOM_SIGNALS = ['痛', '疼', '胀', '闷', '堵', '酸', '麻', '木', '晕', '鸣', '慌', '悸', '促', '短', '乏', '疲', '沉', '肿', '咳', '喘', '呛', '痒', '烧', '坠'];
+
+    // Skill 1 · Extractor（口语映射 + 部位信号 + 类目命中 + 维度覆盖）
     function skillExtractor(ctx, input) {
         const text = input.user_raw_input || '';
         const rag = getRag();
@@ -142,6 +145,7 @@
         let bestCat = null, bestScore = 0;
         (rag.categories || []).forEach(cat => {
             let score = 0;
+            // 口语同义词（扩充覆盖：程度副词×症状同义×部位变体）
             (cat.oral_synonyms || []).forEach(syn => {
                 const hit = syn.oral.find(o => text.indexOf(o) >= 0);
                 if (hit) {
@@ -150,7 +154,18 @@
                     if (syn.dimension) covered.add(syn.dimension);
                 }
             });
+            // 标准关键词
             (cat.standard_keywords || []).forEach(k => { if (text.indexOf(k) >= 0) score += 1; });
+            // 部位信号层（自然语言容错核心）：命中身体部位即 +2 并标记 body，
+            // 使「胸很痛 / 胃特别痛 / 胸口有点疼」等任意自然表述都能触发对应专病类目，不再依赖完整词命中
+            let regionHit = false;
+            (cat.region_keywords || []).forEach(r => {
+                if (text.indexOf(r) >= 0) { score += 2; regionHit = true; }
+            });
+            if (regionHit) covered.add('body');
+            // 全局症状信号：与部位信号组合时再 +1，强化专病指向（如「胸很痛」= 胸+痛 → 心肺胸胁）
+            const hasSignal = DEFAULT_SYMPTOM_SIGNALS.some(s => text.indexOf(s) >= 0);
+            if (regionHit && hasSignal) score += 1;
             if (score > bestScore) { bestScore = score; bestCat = cat; }
         });
         const allDims = collectAllDims(rag);
