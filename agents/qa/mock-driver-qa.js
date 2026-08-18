@@ -344,6 +344,22 @@ console.log('\n=== 整改用例 14：5D 加权矩阵评分（专病+十问 → T
     check('肝胆·胀痛连胸乳+遇怒 → Top1=柴胡疏肝散', bc3.formula_name === '柴胡疏肝散', 'fm=' + bc3.formula_name);
 }
 
+console.log('\n=== 整改用例 18：v1.47 导出长图泛白根因修复（onclone 抑制 fade-in + cream 底色） ===');
+{
+    // QA 运行于 Node，无浏览器/html2canvas，改用静态契约断言锁定修复点：
+    // exportReportImage 的 html2canvas 调用必须 (1) 含 onclone 回调 (2) 在克隆文档中关闭 fade-in 动画
+    // (3) 强制 .report-card 的 cream 底色与不透明度，避免动画起始帧（opacity:0）被截到导致泛白。
+    const fs = require('fs');
+    const src = fs.readFileSync(require('path').resolve(__dirname, '../../script.js'), 'utf8');
+    const call = src.slice(src.indexOf('html2canvas(card'));
+    // 注意：onclone 注入的 CSS 规则为「选择器 { 属性 }」同行的单行字符串，正则需允许跨 {，故用 [^\n]* 而非 [^{]*
+    check('导出调用含 onclone 回调（克隆文档内修复动画/透明度）', /onclone\s*:/.test(call), '未找到 onclone');
+    check('onclone 关闭 .fade-in 动画（animation: none）', /\.fade-in,\s*\.fade-in\s*\*\s*\{\s*animation:\s*none/.test(call));
+    check('onclone 强制 .report-card 不透明度为 1', /\.report-card\s*\{\s*background:\s*#FAF8F5[^}]*opacity:\s*1/.test(call));
+    check('onclone 强制 .report-card 背景为 cream #FAF8F5', /\.report-card\s*\{\s*background:\s*#FAF8F5/.test(call));
+    check('导出选项 backgroundColor 仍为 cream #FAF8F5', /backgroundColor:\s*'#FAF8F5'/.test(call));
+}
+
 console.log('\n============================================');
 console.log('  通过 ' + pass + ' / 失败 ' + fail + ' （共 ' + (pass + fail) + ' 项断言）');
 console.log('============================================\n');

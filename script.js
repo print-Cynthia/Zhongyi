@@ -1020,7 +1020,25 @@ function exportReportImage() {
     const btn = event && event.target;
     const oldText = btn ? btn.textContent : '';
     if (btn) { btn.textContent = '正在生成图片...'; btn.disabled = true; }
-    html2canvas(card, { backgroundColor: '#FAF8F5', scale: 2, useCORS: true, logging: false, scrollY: -window.scrollY }).then(function (canvas) {
+    html2canvas(card, {
+        backgroundColor: '#FAF8F5',
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        scrollY: -window.scrollY,
+        // v1.47 根因修复：克隆 DOM 后 .fade-in 的 animation-fill-mode:both 会截到 opacity:0 起始帧，
+        // 导致整张图被以近 0% 不透明度渲染（泛白）。onclone 在克隆文档里强制钉死为终止态。
+        onclone: function (clonedDoc) {
+            const fix = clonedDoc.createElement('style');
+            fix.textContent = [
+                '.fade-in, .fade-in * { animation: none !important; }',
+                '.report-card { background:#FAF8F5 !important; opacity:1 !important; transform:none !important; }',
+                '.report-card, .report-card * { opacity:1 !important; transform:none !important; }',
+                '.search-button, .ghost-btn { opacity:1 !important; }'
+            ].join('\n');
+            clonedDoc.head.appendChild(fix);
+        }
+    }).then(function (canvas) {
         canvas.toBlob(function (blob) {
             if (blob && navigator.clipboard && window.ClipboardItem) {
                 navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
