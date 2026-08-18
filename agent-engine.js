@@ -6,7 +6,7 @@
  *   - 状态机 S0~S6 的编排（Min Rounds=2 硬下限 / Max Rounds=5 硬停 / 红线切断 / 降级）
  *   - getDriver('mock'|'cloud') 可插拔接缝：未来切 CloudAPIDriver 业务代码零改动
  *
- * 5D 推理矩阵（CPO 终极指令 v1.43 注入）+ 部位信号容错层（v1.44：region_keywords×symptom_signals 自然语言容错）+ 词库全量扩充（v1.45：CPO 指令补齐 5 类 region_keywords/oral_synonyms，覆盖程度副词/方言/俗语变体，语料库 version 1.3）：
+ * 5D 推理矩阵（CPO 终极指令 v1.43 注入）+ 部位信号容错层（v1.44：region_keywords×symptom_signals 自然语言容错）+ 词库全量扩充（v1.45：CPO 指令补齐 5 类 region_keywords/oral_synonyms，覆盖程度副词/方言/俗语变体，语料库 version 1.3）+ 全量三层特征网络（v1.46：FEATURE_TAXONOMY 三维加权归经，废除部位名词单一逻辑与瓜蒌薤白半夏汤硬编码兜底）：
  *   - 双轨追问：轨1 主诉专病细化（depth_prompts）→ 完备度<0.85 平滑进入轨2《十问篇》(global_inquiry)
  *   - 加权矩阵：Score = Σ专病Tag×25 + Σ十问Tag×15 − Σ相克Tag×20，遍历全部方剂取 Top1 与脏腑方向
  *   - 永远产出倾向性结论（严禁「信息待补」），score<25 标记 low_confidence
@@ -133,40 +133,74 @@
         return { blocked: false, matched_red_flags: [] };
     }
 
-    // 全局症状信号词（自然语言容错：与部位信号组合判定专病类目）
-    const DEFAULT_SYMPTOM_SIGNALS = ['痛', '疼', '胀', '闷', '堵', '酸', '麻', '木', '晕', '鸣', '慌', '悸', '促', '短', '乏', '疲', '沉', '肿', '咳', '喘', '呛', '痒', '烧', '坠'];
+    // ===================== 全量三层特征网络 · FEATURE_TAXONOMY（v1.46 CPO 指令） =====================
+    // 废除「过度依赖解剖部位名词」的单一逻辑：每类目三维特征（解剖部位 / 动作·排泄·官能 / 全身·感知），
+    // 加权计分：动作·排泄词(3) + 部位词(2) + 全身感知词(1)。初筛全 0 → 归经标记 pending（不硬绑任何类目）。
+    // 注：原始指令心肺解剖含裸字「心」，因其极易误触（如「心情」），已收敛为心口/心前/心脏/心窝/胸骨等
+    //     身体特异性部位词（仍覆盖「心口痛」等表达），属工程取舍，已在汇报中标注。
+    const FT_W_ACTION = 3, FT_W_ANATOMY = 2, FT_W_SOMATIC = 1;
+    const FEATURE_TAXONOMY = {
+        xin_fei_xiong_xie: {
+            name: '心肺胸胁',
+            anatomy: ['胸', '心口', '心前', '胸口', '胸前', '胸腔', '膻中', '心脏', '左胸', '右胸', '胸口窝', '后背', '心窝', '胸骨', '肺'],
+            action: ['喘', '咳', '痰', '气短', '气促', '喘息', '心慌', '心跳', '心悸', '绞痛', '压迫', '胸口发紧', '胸闷憋气', '心前区不适', '心烦不宁', '一口气上不来', '呼吸不上来', '砰砰跳'],
+            somatic: ['一口气上不来', '呼吸不上来', '胸口发紧', '胸闷憋气', '心前区不适', '心烦不宁']
+        },
+        gan_dan_yu_jie: {
+            name: '肝胆疏泄',
+            anatomy: ['胁', '肋', '肝', '胆', '少腹', '乳房', '两肋', '侧腹', '头顶', '太阳穴', '肋下', '两胁'],
+            action: ['叹气', '善太息', '发火', '易怒', '急躁', '烦躁', '郁闷', '憋屈', '口苦', '咽干', '嘴巴苦', '胀', '胀痛'],
+            somatic: ['情绪激动', '两胁胀满', '情绪低落', '夜间情志不舒', '烦热']
+        },
+        pi_wei_yun_hua: {
+            name: '脾胃运化',
+            anatomy: ['胃', '腹', '肠', '脾', '脘', '肚', '脐', '中焦', '心下', '下腹', '小肚', '胃脘', '胃部', '肠胃', '小肚腩'],
+            action: ['拉', '泻', '泄', '排便', '便', '屎', '大便', '溏', '窜稀', '跑厕所', '吐', '呕', '反酸', '烧心', '打嗝', '嗳气', '呃逆', '胀', '消化', '纳呆', '吃不下', '食少', '不思饮食', '恶心', '反胃', '咕噜'],
+            somatic: ['口黏', '口甜', '口淡', '肢体困重', '便溏', '完谷不化', '大便粘']
+        },
+        shen_xi_shui_ye: {
+            name: '肾系水液',
+            anatomy: ['腰', '膝', '肾', '下肢', '腿', '脚', '足', '命门', '腰骶', '小腿', '眼皮', '脸', '眼袋'],
+            action: ['尿', '夜尿', '起夜', '小便', '遗尿', '尿频', '浮肿', '水肿', '肿', '酸软', '无力', '腰酸'],
+            somatic: ['畏寒', '怕冷', '手足冰冷', '手脚凉', '腰酸背痛', '动则气喘', '精神萎靡', '怎么也暖不热', '黑眼圈重', '没精神', '容易累']
+        },
+        biao_zheng_wai_gan: {
+            name: '外感表证',
+            anatomy: ['头', '额', '太阳穴', '后脑勺', '鼻', '咽', '喉', '嗓子', '皮毛', '骨节', '喉咙', '感冒', '着凉', '受风', '风一吹'],
+            action: ['发热', '发烧', '恶寒', '恶风', '怕风', '打喷嚏', '喷嚏', '流涕', '鼻塞', '咽痛', '喉痛', '咳嗽', '出汗', '无汗', '浑身酸痛', '骨节酸疼', '嗓子干疼', '头痛', '头重如裹', '发冷打战', '肌肉酸痛', '发冷', '冷颤', '头重脚轻'],
+            somatic: ['浑身酸痛', '骨节酸疼', '头重如裹', '发冷打战', '嗓子干疼', '头重脚轻']
+        }
+    };
 
-    // Skill 1 · Extractor（口语映射 + 部位信号 + 类目命中 + 维度覆盖）
+    // Skill 1 · Extractor（三维特征矩阵加权归经 + 口语标准映射）
     function skillExtractor(ctx, input) {
         const text = input.user_raw_input || '';
         const rag = getRag();
-        const matchedStandards = [];   // [{standard, dimension, raw}]
+        const matchedStandards = [];   // [{standard, dimension, raw}]（供叙述 / 维度覆盖）
         const covered = new Set();
-        let bestCat = null, bestScore = 0;
+        let bestCat = null, bestScore = 0, bestMaxLen = 0, bestStatus = 'pending';
         (rag.categories || []).forEach(cat => {
-            let score = 0;
-            // 口语同义词（扩充覆盖：程度副词×症状同义×部位变体）
+            // 1) 口语同义词 → 标准症状映射（轻量，仅用于叙述与维度覆盖）
             (cat.oral_synonyms || []).forEach(syn => {
                 const hit = syn.oral.find(o => text.indexOf(o) >= 0);
                 if (hit) {
-                    score += 2;
                     matchedStandards.push({ standard: syn.standard, dimension: syn.dimension, raw: hit });
                     if (syn.dimension) covered.add(syn.dimension);
                 }
             });
-            // 标准关键词
-            (cat.standard_keywords || []).forEach(k => { if (text.indexOf(k) >= 0) score += 1; });
-            // 部位信号层（自然语言容错核心）：命中身体部位即 +2 并标记 body，
-            // 使「胸很痛 / 胃特别痛 / 胸口有点疼」等任意自然表述都能触发对应专病类目，不再依赖完整词命中
-            let regionHit = false;
-            (cat.region_keywords || []).forEach(r => {
-                if (text.indexOf(r) >= 0) { score += 2; regionHit = true; }
-            });
-            if (regionHit) covered.add('body');
-            // 全局症状信号：与部位信号组合时再 +1，强化专病指向（如「胸很痛」= 胸+痛 → 心肺胸胁）
-            const hasSignal = DEFAULT_SYMPTOM_SIGNALS.some(s => text.indexOf(s) >= 0);
-            if (regionHit && hasSignal) score += 1;
-            if (score > bestScore) { bestScore = score; bestCat = cat; }
+            // 2) 三维特征矩阵加权（核心归经逻辑）：动作/排泄(3) + 部位(2) + 全身感知(1)
+            const ft = FEATURE_TAXONOMY[cat.id];
+            let score = 0, maxLen = 0;
+            if (ft) {
+                ft.action.forEach(w => { if (text.indexOf(w) >= 0) { score += FT_W_ACTION; if (w.length > maxLen) maxLen = w.length; } });
+                ft.anatomy.forEach(w => { if (text.indexOf(w) >= 0) { score += FT_W_ANATOMY; if (w.length > maxLen) maxLen = w.length; } });
+                ft.somatic.forEach(w => { if (text.indexOf(w) >= 0) { score += FT_W_SOMATIC; if (w.length > maxLen) maxLen = w.length; } });
+            }
+            if (score > 0) covered.add('body');
+            // 平局裁决：总分更高优先；同分则「最长匹配词」优先（避免裸单字抢占具体复合词，如「郁闷」归于肝胆而非心肺的裸「闷」）
+            if (score > bestScore || (score === bestScore && score > 0 && maxLen > bestMaxLen)) {
+                bestScore = score; bestMaxLen = maxLen; bestCat = cat; bestStatus = 'detected';
+            }
         });
         const allDims = collectAllDims(rag);
         const missing = allDims.filter(d => !covered.has(d));
@@ -174,6 +208,7 @@
         return {
             detected_category: bestCat ? bestCat.id : null,
             detected_category_name: bestCat ? bestCat.name : null,
+            category_status: bestStatus,   // 'detected' | 'pending'
             extracted_symptoms: matchedStandards,
             covered_dimensions: Array.from(covered),
             missing_dimensions: missing,
@@ -319,26 +354,41 @@
                     primary: (cat.primary_formula_id === f.id)
                 };
                 if (!best) { best = cand; return; }
-                // 排序：score 降序；同分 → 脏腑亲和（detected）优先 → primary_formula 优先 → 先入
+                // 排序：score 降序；同分处理见下
                 if (cand.score > best.score) { best = cand; return; }
                 if (cand.score === best.score) {
-                    if (cand.inDetected && !best.inDetected) { best = cand; return; }
-                    if (cand.inDetected === best.inDetected && cand.primary && !best.primary) { best = cand; return; }
+                    if (detectedCat) {
+                        // 有归经：脏腑亲和（detected）优先 → primary_formula 优先
+                        if (cand.inDetected && !best.inDetected) { best = cand; return; }
+                        if (cand.inDetected === best.inDetected && cand.primary && !best.primary) { best = cand; return; }
+                    } else {
+                        // 归经待定：废除「任意具体方剂默认胜出」，按命中 Tag 数更多优先（真·Tag 矩阵加权）
+                        const cCnt = cand.zhuan.length + cand.shiwen.length + cand.incompat.length;
+                        const bCnt = best.zhuan.length + best.shiwen.length + best.incompat.length;
+                        if (cCnt > bCnt) { best = cand; return; }
+                    }
                 }
             });
         });
 
-        // 极端兜底：语料库无任何方剂（理论不会出现）→ 中性通用，绝不「信息待补」
-        if (!best || !best.formula) {
+        // 废除硬编码兜底：归经待定（category_id 为 null）且加权矩阵无任何命中（score=0）时，
+        // 严禁默认回退到具体古籍方剂（如「瓜蒌薤白半夏汤」），仅给中性整体调理方向 + low_confidence
+        const noSignal = (detectedCat === null && best.score === 0);
+        if (!best || !best.formula || noSignal) {
             return {
-                retrieval_status: 'generic',
+                retrieval_status: 'pending',
                 knowledge_payload: {
                     matched_formula: {
                         formula_name: '整体辨证调理方向', source_book: '通用参考',
-                        description: '当前信息尚不足以精准匹配某一典籍方剂，建议从整体调和气血方向了解，具体诊疗请遵医嘱。',
+                        description: '当前信息尚不足以精准归经到某一脏腑方向，建议从整体调和气血、顾护脾胃方向了解，具体诊疗请遵医嘱。',
                         composition: []
                     },
                     matched_herbs: [],
+                    bias_conclusion: {
+                        category_id: null, category_name: '待归经', formula_name: '整体辨证调理方向',
+                        score: 0, matched_zhuan_tags: [], matched_shiwen_tags: [], low_confidence: true,
+                        conclusion_text: '当前描述信息较少，暂无法确定明确的脏腑方向与具体典籍方剂。建议补充更多身体表现后，由医生进一步辨证。'
+                    },
                     dietary_and_lifestyle_advice: { fruit_guidance: '饮食宜清淡温和，避免生冷油腻。', habit_guidance: '保持规律作息，适度运动。' }
                 }
             };

@@ -1020,7 +1020,7 @@ function exportReportImage() {
     const btn = event && event.target;
     const oldText = btn ? btn.textContent : '';
     if (btn) { btn.textContent = '正在生成图片...'; btn.disabled = true; }
-    html2canvas(card, { backgroundColor: '#ffffff', scale: 2, useCORS: true, logging: false }).then(function (canvas) {
+    html2canvas(card, { backgroundColor: '#FAF8F5', scale: 2, useCORS: true, logging: false, scrollY: -window.scrollY }).then(function (canvas) {
         canvas.toBlob(function (blob) {
             if (blob && navigator.clipboard && window.ClipboardItem) {
                 navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])

@@ -152,6 +152,40 @@ console.log('\n=== 整改用例 16：CPO 词库扩充校验（新增部位 / 口
     check('词库扩充：全部 ' + cases.length + ' 例命中正确类目', ok === cases.length, ok + '/' + cases.length);
 }
 
+console.log('\n=== 整改用例 17：v1.46 三维特征网络 + 废除瓜蒌薤白硬编码兜底 ===');
+{
+    const drv = new LocalMockDriver();
+    // 1) 动作/排泄词（权重 3）独立命中：拉/屎/窜稀/反酸 → 脾胃运化；起夜 → 肾系；不依赖解剖部位名词
+    const cases = [
+        ['我一天拉了六次屎', 'pi_wei_yun_hua'],
+        ['我老是拉肚子', 'pi_wei_yun_hua'],
+        ['吃凉的就窜稀', 'pi_wei_yun_hua'],
+        ['我胃胀还反酸', 'pi_wei_yun_hua'],
+        ['最近总嗳气、烧心', 'pi_wei_yun_hua'],
+        ['我每天起夜三次', 'shen_xi_shui_ye'],
+        ['嗓子疼、有点发热', 'biao_zheng_wai_gan'],
+        ['两肋胀、爱发火', 'gan_dan_yu_jie']
+    ];
+    cases.forEach(([t, expect]) => {
+        const ext = drv.invoke('extractor', {}, { user_raw_input: t }).data;
+        check('三维特征网络：「' + t + '」→ ' + expect, ext.detected_category === expect, 'got=' + ext.detected_category);
+    });
+    // 2) 端到端：腹泻输入应进脾胃专病追问，最终不回退到瓜蒌薤白半夏汤
+    const { session } = runFlow('我一天拉了六次屎', [['稀溏 / 腹泻'], ['食欲不振、吃得很少'], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const rep = session.confirm();
+    const fm = rep.data.ui_card_payload.sections.matched_formula_section;
+    check('「一天拉了六次屎」首轮即脾胃专病（非心肺）', session.categoryId === 'pi_wei_yun_hua', 'cat=' + session.categoryId);
+    check('腹泻输入最终不回退到「瓜蒌薤白半夏汤」', fm.formula_name !== '瓜蒌薤白半夏汤', 'fm=' + fm.formula_name);
+    check('腹泻输入归为脾胃方剂（参苓白术散）', fm.formula_name === '参苓白术散', 'fm=' + fm.formula_name);
+    // 3) 归经待定（笼统/全兜底）→ 严禁默认古籍方剂，返回中性待归经
+    const { session: s2 } = runFlow('我最近不太舒服', [[FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const rep2 = s2.confirm();
+    const fm2 = rep2.data.ui_card_payload.sections.matched_formula_section;
+    check('归经待定（全兜底）→ retrieval_status=pending（非 success）', s2.knowledge.retrieval_status === 'pending', 'status=' + s2.knowledge.retrieval_status);
+    check('归经待定 → 不回退到「瓜蒌薤白半夏汤」', fm2.formula_name !== '瓜蒌薤白半夏汤', 'fm=' + fm2.formula_name);
+    check('归经待定 → 中性整体调理方向 + low_confidence', fm2.formula_name === '整体辨证调理方向' && rep2.data.ui_card_payload.sections.bias_conclusion_section.low_confidence === true);
+}
+
 console.log('\n=== 契约用例 2：模糊 / 空输入健壮性 ===');
 {
     const s = new SymptomSession(getDriver('mock'));
@@ -246,7 +280,7 @@ console.log('\n=== 整改用例 10：Skill5 深度报告（病机译释 + 第一
     const sec = rep.data.ui_card_payload.sections;
     const fm = sec.matched_formula_section;
     check('匹配到精确典籍方剂（非泛化降级）', fm.formula_name === '瓜蒌薤白半夏汤', 'fm=' + fm.formula_name);
-    check('通俗译释调用 formula.tcm_explanation（病机，非重复表征）', /胸阳不振|痰浊|气机/.test(sec.tcm_explanation_section));
+    check('通俗译释为日常大白话比喻（含「胸口/阳气/气血」且不含生涩古籍术语）', /胸口|阳气|气血|痰湿/.test(sec.tcm_explanation_section) && !/胸阳不振|痰浊闭阻/.test(sec.tcm_explanation_section), sec.tcm_explanation_section.slice(0, 24) + '…');
     check('面诊话术为第一人称「医生您好」', /^医生您好/.test(sec.doctor_communication_brief));
     check('组成药材 chips 数 = 方剂 composition 数', sec.composition_chips.length === fm.composition.length, sec.composition_chips.length + ' vs ' + fm.composition.length);
     const linked = sec.composition_chips.filter(c => c.herb_id);
