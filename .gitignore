@@ -2,3 +2,6 @@
 _backup*/
 node_modules/
 *.tmp
+
+# 不公开本地工作记忆与产品设计文档（PRD）等 PDF
+*.pdf
