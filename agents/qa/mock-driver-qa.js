@@ -360,6 +360,79 @@ console.log('\n=== 整改用例 18：v1.47 导出长图泛白根因修复（oncl
     check('导出选项 backgroundColor 仍为 cream #FAF8F5', /backgroundColor:\s*'#FAF8F5'/.test(call));
 }
 
+console.log('\n=== 整改用例 19：v1.48 药材库 Schema 校验（78 味零容忍） ===');
+{
+    let D;
+    try { D = require('../../data.js'); } catch (e) { D = null; }
+    check('data.js 可被 Node 加载并导出', !!D, 'require 失败');
+    if (D) {
+        const herbs = D.HERB_DATA || [];
+        check('药材总数达到 CPO 目标（60~80 味）', herbs.length >= 60 && herbs.length <= 80, 'len=' + herbs.length);
+        const FIELDS = ['id', 'name', 'latin', 'property', 'meridians', 'category', 'tags', 'oneLiner', 'description', 'directions', 'pairings', 'contraindications', 'explanation', 'clinical_tags', 'image'];
+        let fieldOk = true, badField = '';
+        herbs.forEach(h => FIELDS.forEach(f => { if (!(f in h)) { fieldOk = false; badField = h.id + '.' + f; } }));
+        check('每味药材 15 个字段齐全', fieldOk, badField);
+        // 分类 / 归经 白名单
+        const CATS = (D.CATEGORIES || []).filter(c => c !== '全部');
+        const MER = ['肺', '大肠', '胃', '脾', '心', '小肠', '膀胱', '肾', '心包', '三焦', '胆', '肝'];
+        let enumOk = true, badEnum = '';
+        herbs.forEach(h => {
+            if (CATS.indexOf(h.category) < 0) { enumOk = false; badEnum = h.id + ' 分类=' + h.category; }
+            (h.meridians || []).forEach(m => { if (MER.indexOf(m) < 0) { enumOk = false; badEnum = h.id + ' 归经=' + m; } });
+        });
+        check('分类 / 归经 全部在白名单内', enumOk, badEnum);
+        // id 格式 + 重复检测
+        const ID_RE = /^[a-z0-9_]+$/;
+        let idOk = true, badId = '';
+        const seen = new Set();
+        herbs.forEach(h => {
+            if (!ID_RE.test(h.id)) { idOk = false; badId = h.id; }
+            if (seen.has(h.id)) { idOk = false; badId = '重复 ' + h.id; }
+            seen.add(h.id);
+        });
+        check('id 格式合法且唯一（无重复 / 无非法字符）', idOk, badId);
+        // 派生表一致性：SYMPTOM_DATA 引用的 herb id 必须存在
+        const ids = seen;
+        let refOk = true, badRef = '';
+        (D.SYMPTOM_DATA || []).forEach(g => g.herbs.forEach(id => { if (!ids.has(id)) { refOk = false; badRef = id; } }));
+        check('SYMPTOM_DATA 引用的 herb id 全部存在', refOk, badRef);
+        // 分类筛选闭合：CATEGORIES 覆盖所有出现过的 category
+        const usedCats = new Set(herbs.map(h => h.category));
+        let coverOk = true, missCat = '';
+        usedCats.forEach(c => { if (CATS.indexOf(c) < 0) { coverOk = false; missCat = c; } });
+        check('CATEGORIES 覆盖全部使用到的分类', coverOk, missCat);
+    }
+}
+
+console.log('\n=== 整改用例 20：v1.48 Herb 二级检索（L2 动态相关性排序） ===');
+{
+    const D = require('../../data.js');
+    const kb = { herbs: D.HERB_DATA, nameToId: D.CABINET_DATA };
+    const mesh = E.buildHerbMesh(kb);
+    check('L2 Herb 特征网格构建成功（herbs=总数）', mesh.herbs.length === D.HERB_DATA.length, 'mesh=' + mesh.herbs.length);
+    // 脾胃归经 → 应推 健脾/化湿/温里/消食/补气 类，且非空、按相关性降序
+    const rec = E.recommendHerbs(mesh, { categoryId: 'pi_wei_yun_hua', signals: ['腹胀', '食欲不振', '便溏'], topN: 6 });
+    check('脾胃归经 L2 推荐非空', rec.length > 0, 'len=' + rec.length);
+    const targetCats = E.ZANGFU_TO_HERB_CATS['pi_wei_yun_hua'];
+    check('脾胃 L2 推荐全部落在关联本草大类', rec.every(r => targetCats.indexOf(r.category) >= 0), JSON.stringify(rec.map(r => r.category)));
+    let sortedDesc = true;
+    for (let i = 1; i < rec.length; i++) { if (rec[i].relevance_score > rec[i - 1].relevance_score) sortedDesc = false; }
+    check('L2 推荐按相关性得分降序排列', sortedDesc, rec.map(r => r.relevance_score).join(','));
+    // 未归经（null）+ 信号 → 应命中安神类（酸枣仁 / 柏子仁）
+    const rec2 = E.recommendHerbs(mesh, { categoryId: null, signals: ['失眠', '多梦'], topN: 5 });
+    check('失眠信号 L2 命中安神类草本', rec2.some(r => r.category === '安神'), JSON.stringify(rec2.map(r => r.herb_name)));
+    // 报告 payload 透传 herb_recommendation_section（端到端）
+    // 说明：本 QA 文件顶部用 4 味最小桩（无 category）测试 5D 矩阵，故此处临时接入真实 data.js（78 味）
+    // 后再跑端到端，确保 L2 在真实数据下产出；原 134 条断言已先行执行完毕，不受影响。
+    globalThis.HERB_DATA = D.HERB_DATA;
+    globalThis.CABINET_DATA = D.CABINET_DATA;
+    const { session: s3 } = runFlow('我胃胀、吃不下、大便稀', [['食后腹胀不消化'], ['食欲不振、吃得很少'], ['稀溏 / 腹泻'], [FALLBACK_LABEL], [FALLBACK_LABEL]]);
+    const rep3 = s3.confirm();
+    const recSec = rep3.data.ui_card_payload.sections.herb_recommendation_section || [];
+    check('端到端报告含 L2 herb_recommendation_section', Array.isArray(recSec), 'type=' + typeof recSec);
+    check('L2 区块含 L1 无关的独立推荐（不替代方剂结论）', recSec.length > 0, 'len=' + recSec.length);
+}
+
 console.log('\n============================================');
 console.log('  通过 ' + pass + ' / 失败 ' + fail + ' （共 ' + (pass + fail) + ' 项断言）');
 console.log('============================================\n');

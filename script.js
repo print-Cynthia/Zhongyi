@@ -58,11 +58,41 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // --- 药柜系统 ---
+// 首页百宝柜固定精选池（4×4 = 16 格）。优先从全量药材库过滤这些核心药材渲染。
+const FEATURED_HERB_IDS = ['huangqi', 'danggui', 'jinyinhua', 'fuling', 'chenpi', 'juhua', 'gancao', 'baizhu', 'maidong', 'gouqizi', 'huanglian', 'yiyiren', 'dangshen', 'huangqin', 'lianqiao', 'zhizi'];
+
+// 计算百宝柜实际渲染的药材名称列表：
+//   方案 A（静态精选）：按 FEATURED_HERB_IDS 顺序从全量库过滤出存在的药材；
+//   方案 B（切片兜底）：若精选不足 16，从全量 CABINET_DRAWERS 顺序补足，严禁直接遍历全量 78 味。
+// 无论哪种路径，最终严格截断为 16 格（4×4），从根上杜绝隐式行溢出/重影。
+function getFeaturedCabinetNames() {
+    const idToName = {};
+    if (typeof CABINET_DATA === 'object' && CABINET_DATA) {
+        Object.keys(CABINET_DATA).forEach(function (n) { idToName[CABINET_DATA[n]] = n; });
+    }
+    const names = [];
+    const seen = {};
+    if (Array.isArray(FEATURED_HERB_IDS) && FEATURED_HERB_IDS.length) {
+        FEATURED_HERB_IDS.forEach(function (id) {
+            const nm = idToName[id];
+            if (nm && !seen[nm]) { names.push(nm); seen[nm] = true; }
+        });
+    }
+    if (typeof CABINET_DRAWERS === 'object' && CABINET_DRAWERS.length) {
+        for (let i = 0; i < CABINET_DRAWERS.length && names.length < 16; i++) {
+            const nm = CABINET_DRAWERS[i];
+            if (!seen[nm]) { names.push(nm); seen[nm] = true; }
+        }
+    }
+    return names.slice(0, 16);
+}
+
 function initCabinet() {
     const grid = document.getElementById('cabinet-grid');
     grid.innerHTML = '';
 
-    CABINET_DRAWERS.forEach((name, index) => {
+    const cabinetNames = getFeaturedCabinetNames();
+    cabinetNames.forEach((name, index) => {
         const drawer = document.createElement('div');
         drawer.className = 'cabinet-drawer';
         drawer.dataset.name = name;
@@ -924,6 +954,14 @@ function renderS5HTML(data) {
             ${h.has_toxicity ? `<div class="report-herb-warn">${h.toxicity_warning || ''}</div>` : ''}
         </div>
     `).join('') : '<div class="report-content">暂无特别匹配的草本，建议从温和调理方向了解。</div>';
+    // L2 二级草本推荐（v1.48）：按相关性加权排序，独立于 L1 方剂结论
+    const recs = sec.herb_recommendation_section || [];
+    const recCards = recs.length ? recs.map(r => `
+        <div class="report-herb">
+            <div class="report-herb-name">${r.herb_name}<span class="relevance-tag" style="font-size:11px;color:var(--primary-green);border:1px solid var(--primary-green);border-radius:10px;padding:1px 8px;margin-left:6px">相关度 ${r.relevance_score}</span></div>
+            <div class="report-herb-desc">${r.oneLiner || ''}（${r.category} · ${r.property}）</div>
+        </div>
+    `).join('') : '<div class="report-content">暂无特别匹配的草本推荐。</div>';
     const habitItems = (life.habits || []).map(h => `<li>${h}</li>`).join('');
 
     return `
@@ -976,6 +1014,11 @@ function renderS5HTML(data) {
             <div class="report-section">
                 <h5>相关草本知识</h5>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">${herbCards}</div>
+            </div>
+
+            <div class="report-section">
+                <h5>二级草本推荐（按相关性加权）</h5>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">${recCards}</div>
             </div>
 
             <div class="report-section">

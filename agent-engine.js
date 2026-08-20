@@ -67,6 +67,54 @@
             nameToId: (typeof CABINET_DATA !== 'undefined') ? CABINET_DATA : (globalThis.__TEST_NAME_TO_ID__ || {})
         };
     }
+
+    /* ============================ 0.5 二级精细化加权 · Herb 特征网格（v1.48 CPO 裁决） ============================ */
+    // L1 = 5D 方剂矩阵（不变，作为主路由）；L2 = Herb 级检索分支（动态相关性排序 + 报告渲染）。
+    // 脏腑类目 → 相关草本大类映射（用于把“身体信号归经”翻译成“本草方向”）
+    const ZANGFU_TO_HERB_CATS = {
+        xin_fei_xiong_xie: ['清热', '活血', '止咳', '养阴'],
+        gan_dan_yu_jie: ['理气', '清热', '活血'],
+        pi_wei_yun_hua: ['健脾', '化湿', '温里', '消食', '补气'],
+        shen_xi_shui_ye: ['补肾', '利水', '温里', '养阴'],
+        biao_zheng_wai_gan: ['解表', '清热']
+    };
+    // 构建 Herb 特征网格：按 大类 / 标签 / 临床方向 索引，供二级检索 O(1) 命中
+    function buildHerbMesh(kb) {
+        const herbs = (kb && kb.herbs) || [];
+        const byCategory = {};
+        herbs.forEach(h => {
+            const cat = h.category || '未分类';
+            (byCategory[cat] = byCategory[cat] || []).push(h);
+        });
+        return { herbs: herbs, byCategory: byCategory };
+    }
+    // L2 二级检索：给定归经类目 + 会话信号（中文标签），返回按相关性加权排序的草本推荐
+    function recommendHerbs(mesh, opts) {
+        opts = opts || {};
+        const categoryId = opts.categoryId || null;
+        const signals = opts.signals || [];
+        const topN = opts.topN || 6;
+        const targetCats = (categoryId && ZANGFU_TO_HERB_CATS[categoryId]) ? ZANGFU_TO_HERB_CATS[categoryId] : [];
+        const scored = (mesh.herbs || []).map(h => {
+            let score = 0;
+            if (targetCats.indexOf(h.category) >= 0) score += 10;       // 同本草大类（归经翻译后）优先
+            signals.forEach(s => {
+                if (!s) return;
+                if ((h.tags || []).indexOf(s) >= 0) score += 4;
+                if ((h.clinical_tags || []).indexOf(s) >= 0) score += 3;
+                if (h.category === s) score += 2;
+                if (h.name === s) score += 6;
+            });
+            if (score <= 0) return null;
+            return { herb: h, score: score };
+        }).filter(Boolean);
+        scored.sort((a, b) => (b.score - a.score) || a.herb.name.localeCompare(b.herb.name, 'zh'));
+        return scored.slice(0, topN).map(x => ({
+            herb_id: x.herb.id, herb_name: x.herb.name, category: x.herb.category,
+            property: x.herb.property, relevance_score: x.score, oneLiner: x.herb.oneLiner
+        }));
+    }
+
     // 收集语料库中出现过的所有维度（用于 missing_dimensions 计算）
     function collectAllDims(rag) {
         const set = new Set();
@@ -339,6 +387,13 @@
         const selectedSet = new Set(selected);
         const detectedCat = input.category_id || null;
 
+        // —— L2 二级精细化加权：Herb 特征网格检索（不改动 L1 五D 矩阵结论，仅追加 herb_recommendations） ——
+        const mesh = buildHerbMesh(kb);
+        const sigLabels = selected.map(t => tagLabel(t, maps));
+        const detectedCatName = (getRag().categories || []).find(c => c.id === detectedCat);
+        if (detectedCatName) sigLabels.push(detectedCatName.name);
+        const herbRecommendations = recommendHerbs(mesh, { categoryId: detectedCat, signals: sigLabels, topN: 6 });
+
         // —— 5D 加权矩阵：Score = Σ专病Tag×25 + Σ十问Tag×15 − Σ相克Tag×20 ——
         let best = null;
         (rag.categories || []).forEach(cat => {
@@ -384,6 +439,7 @@
                         composition: []
                     },
                     matched_herbs: [],
+                    herb_recommendations: herbRecommendations,
                     bias_conclusion: {
                         category_id: null, category_name: '待归经', formula_name: '整体辨证调理方向',
                         score: 0, matched_zhuan_tags: [], matched_shiwen_tags: [], low_confidence: true,
@@ -438,6 +494,7 @@
                     fruit: formula.fruit, habit: formula.habit
                 },
                 matched_herbs: herbs,
+                herb_recommendations: herbRecommendations,
                 bias_conclusion: {
                     category_id: cat.id, category_name: cat.name,
                     formula_name: formula.formula_name, source_book: formula.source_book,
@@ -500,6 +557,7 @@
             },
             composition_chips: compositionChips,
             herb_knowledge_section: herbs,
+            herb_recommendation_section: (kp.herb_recommendations || []),
             dietary_guidance_section: { fruit_advice: advice.fruit_guidance || '', drink_advice: advice.habit_guidance || '' },
             lifestyle_guidance_section: { habits: (advice.habit_guidance || '').split('。').map(s => s.trim()).filter(Boolean) },
             plain_text_copy_payload: [tcm_explanation, doctor_brief,
@@ -663,6 +721,9 @@
         DISCLAIMER: DISCLAIMER,
         FALLBACK_LABEL: FALLBACK_LABEL,
         getRag: getRag,
+        buildHerbMesh: buildHerbMesh,
+        recommendHerbs: recommendHerbs,
+        ZANGFU_TO_HERB_CATS: ZANGFU_TO_HERB_CATS,
         LocalMockDriver: LocalMockDriver,
         getDriver: getDriver,
         SymptomSession: SymptomSession
