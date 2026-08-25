@@ -5,3 +5,12 @@ node_modules/
 
 # 不公开本地工作记忆与产品设计文档（PRD）等 PDF
 *.pdf
+
+# 本地密钥 / 配置文件（红线：绝不入库；API Key 仅存浏览器 localStorage，源码零硬编码）
+.env
+*.local.js
+drivers/*.local.js
+config.local.*
+*API*.txt
+*API*.key
+*.secret

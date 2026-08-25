@@ -16,6 +16,7 @@ const suggestionStates = {
 };
 let searchScrollPosition = 0;
 let currentSearchResultIds = [];
+let symptomSubmitLocked = false;
 
 document.addEventListener('DOMContentLoaded', () => {
     initCabinet();
@@ -181,6 +182,7 @@ function showSymptomPage() {
     symptomAnswers = {};
     switchPage('symptom');
     symptomResetAndRender();
+    updateCloudStatus();
 }
 
 function switchPage(id) {
@@ -753,9 +755,185 @@ function goBackFromDetail() {
 }
 
 // --- 身体信号整理流程 · 引擎驱动（阶段 2：LocalMockDriver + 状态机 S0~S6） ---
-const symptomSession = new SymptomAgentEngine.SymptomSession(SymptomAgentEngine.getDriver('mock'));
+let symptomSession = null;
 let symptomClarifyLocked = false;
 let lastReportData = null;
+
+// 按 localStorage 是否存在 API Key 自动选择 mock / cloud 驱动；
+// 无密钥或云端请求异常时，CloudAPIDriver 内部静默降级到 LocalMockDriver，永不中断。
+function initSymptomDriver() {
+    let cloud = false;
+    try { if (typeof localStorage !== 'undefined' && localStorage.getItem('tcm_api_key')) cloud = true; } catch (e) {}
+    window.__AGENT_DRIVER__ = cloud ? 'cloud' : 'mock';
+    try {
+        symptomSession = new SymptomAgentEngine.SymptomSession(SymptomAgentEngine.getDriver(cloud ? 'cloud' : 'mock'));
+    } catch (e) {
+        // 云端驱动实例化失败（如 drivers/cloud-driver.js 未加载/404、CloudAPIDriver 未定义）→ 退回本地并明确告知原因
+        symptomSession = new SymptomAgentEngine.SymptomSession(SymptomAgentEngine.getDriver('mock'));
+        symptomSession.cloudStatus = 'degraded';
+        symptomSession.cloudError = '云端驱动加载失败：' + ((e && e.message) || e);
+    }
+    updateCloudStatus();
+}
+
+// 同步 / 异步结果统一处理（CloudAPIDriver.invoke 返回 Promise，LocalMockDriver 返回普通对象）
+// 云端异步时，优先把「当前被点击的按钮」置为「AI 正在整理…」并禁用，避免重复点击；
+// 不再使用独立的全宽提示横幅（用户反馈：横幅一直挂着没意义，按钮状态变化更直观）。
+function showThinking(msg) {
+    let el = document.getElementById('agent-thinking');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'agent-thinking';
+        const c = document.getElementById('symptom-step-container');
+        if (c && c.parentNode) c.parentNode.insertBefore(el, c);
+    }
+    el.textContent = msg || 'AI 正在整理思路，请稍候…';
+    el.style.cssText = 'display:flex;align-items:center;gap:8px;margin:0 auto 18px;max-width:600px;padding:12px 18px;border-radius:12px;background:#EAF3DE;color:#3B6D11;font-size:14px;font-weight:500;';
+    el.hidden = false;
+}
+function hideThinking() {
+    const el = document.getElementById('agent-thinking');
+    if (el) el.hidden = true;
+}
+function settle(res, onDone, onFinally, btn) {
+    const done = function (r) { try { onDone(r); } finally { if (onFinally) onFinally(); } };
+    if (res && typeof res.then === 'function') {
+        // 优先：把当前按钮置为 loading 态（由调用方传入）；无按钮时降级为旧横幅
+        if (btn) {
+            if (!btn.__origText) btn.__origText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'AI 正在整理…';
+        } else {
+            showThinking('AI 正在整理思路，请稍候…');
+        }
+        const restore = function () {
+            if (btn) { btn.disabled = false; btn.textContent = btn.__origText || '确认选择'; btn.__origText = null; }
+            else hideThinking();
+        };
+        res.then(function (r) { restore(); done(r); }).catch(function (e) {
+            restore();
+            console.error('[agent] 云端驱动异常，已自动降级：', e);
+            if (onFinally) onFinally();
+        });
+    } else {
+        done(res);
+    }
+}
+
+// 右上角驱动模式标识（委托给 updateCloudStatus，统一处理「待验证/已接通/已降级」）
+function updateDriverMode() { updateCloudStatus(); }
+
+// 把云端原始错误码翻译成人话（重点提示 CORS 需后端代理）
+function friendlyCloudError(raw) {
+    raw = String(raw || '');
+    if (raw.indexOf('NO_API_KEY') >= 0) return '未配置 API Key';
+    if (raw.indexOf('NO_FETCH') >= 0) return '当前浏览器不支持网络请求';
+    if (raw.indexOf('API_HTTP_401') >= 0) return '密钥无效或无权限（401）';
+    if (raw.indexOf('API_HTTP_403') >= 0) return '密钥无权限（403）';
+    if (raw.indexOf('API_HTTP_429') >= 0) return '请求过于频繁，已被限流（429）';
+    if (raw.indexOf('API_HTTP_4') >= 0) return '请求被拒绝（4xx），请检查密钥或模型名';
+    if (raw.indexOf('API_HTTP_5') >= 0) return '大模型服务端错误（5xx）';
+    if (raw.indexOf('CORS') >= 0 || raw.indexOf('Failed to fetch') >= 0 ||
+        raw.indexOf('NetworkError') >= 0 || raw.indexOf('TypeError') >= 0) {
+        return '浏览器跨域拦截：纯前端无法直连，需后端代理';
+    }
+    if (raw.indexOf('timeout') >= 0 || raw.indexOf('abort') >= 0 || raw.indexOf('AbortError') >= 0) return '请求超时';
+    if (raw.indexOf('LLM_JSON_PARSE_FAIL') >= 0 || raw.indexOf('LLM_EXTRACT_INVALID') >= 0 ||
+        raw.indexOf('LLM_FORMAT_INVALID') >= 0) return 'AI 返回内容无法解析';
+    return raw ? raw.slice(0, 80) : '未知错误';
+}
+
+// 根据会话的 cloudStatus 刷新右上角徽标 + 面板内状态条（无需开发者工具即可判断）
+function updateCloudStatus() {
+    const badge = document.getElementById('driver-mode');
+    const note = document.getElementById('cloud-status-note');
+    if (!badge) return;
+    let key = false;
+    try { key = !!(typeof localStorage !== 'undefined' && localStorage.getItem('tcm_api_key')); } catch (e) {}
+    const st = (symptomSession && symptomSession.cloudStatus) || 'unknown';
+    const err = (symptomSession && symptomSession.cloudError) || '';
+
+    if (!key) {
+        badge.textContent = '本地演示';
+        badge.className = 'driver-mode';
+        badge.title = '未配置 API Key，使用本地演示引擎（点右上角 ⚙ 可填写）';
+        if (note) { note.hidden = true; note.className = 'cloud-status-note'; note.textContent = ''; }
+        return;
+    }
+    if (st === 'ok') {
+        badge.textContent = '云端大模型 · 已接通';
+        badge.className = 'driver-mode cloud ok';
+        badge.title = '已接入云端大模型（qwen-turbo）：语义抽取与报告润色由 AI 完成';
+        if (note) {
+            note.hidden = false;
+            note.className = 'cloud-status-note ok';
+            note.textContent = '✅ 已接入云端大模型：语义抽取与最终报告润色由 AI 生成。';
+        }
+    } else if (st === 'degraded') {
+        const reason = friendlyCloudError(err);
+        badge.textContent = '云端大模型 · 已降级';
+        badge.className = 'driver-mode cloud degraded';
+        badge.title = '云端调用失败，已自动退回本地演示。原因：' + reason;
+        if (note) {
+            note.hidden = false;
+            note.className = 'cloud-status-note degraded';
+            note.textContent = '⚠️ 云端未接通，已自动退回本地演示。原因：' + reason + '。如需稳定直连，建议加后端代理（点 ⚙ 可重新配置密钥）。';
+        }
+    } else {
+        badge.textContent = '云端大模型 · 待验证';
+        badge.className = 'driver-mode cloud pending';
+        badge.title = '已配置密钥，提交描述后将自动验证云端连接';
+        if (note) {
+            note.hidden = false;
+            note.className = 'cloud-status-note pending';
+            note.textContent = '已配置 API Key，提交描述后将自动验证云端连接…';
+        }
+    }
+}
+
+// —— 设置弹窗：API Key 仅存本机 localStorage，源码零硬编码 ——
+function openSettings() {
+    const overlay = document.getElementById('settings-overlay');
+    if (!overlay) return;
+    const input = document.getElementById('apikey-input');
+    const status = document.getElementById('settings-status');
+    if (input && typeof localStorage !== 'undefined') input.value = localStorage.getItem('tcm_api_key') || '';
+    if (status) status.textContent = '';
+    overlay.hidden = false;
+}
+function closeSettings() {
+    const overlay = document.getElementById('settings-overlay');
+    if (overlay) overlay.hidden = true;
+}
+function saveSettings() {
+    const input = document.getElementById('apikey-input');
+    const status = document.getElementById('settings-status');
+    const val = (input && input.value || '').trim();
+    if (!val) { if (status) status.textContent = '请输入有效的 API Key。'; return; }
+    try { localStorage.setItem('tcm_api_key', val); } catch (e) {}
+    window.__AGENT_DRIVER__ = 'cloud';
+    initSymptomDriver();
+    if (status) status.textContent = '已保存，已切换至云端大模型驱动（建议刷新身体信号整理页）。';
+    setTimeout(closeSettings, 1000);
+}
+function clearSettings() {
+    try { localStorage.removeItem('tcm_api_key'); } catch (e) {}
+    window.__AGENT_DRIVER__ = 'mock';
+    initSymptomDriver();
+    const input = document.getElementById('apikey-input');
+    if (input) input.value = '';
+    const status = document.getElementById('settings-status');
+    if (status) status.textContent = '已清除密钥，已退回本地演示引擎。';
+    setTimeout(closeSettings, 1000);
+}
+
+// 点击遮罩空白处关闭
+(function bindSettingsOverlay() {
+    const overlay = document.getElementById('settings-overlay');
+    if (overlay) overlay.addEventListener('click', function (e) { if (e.target === overlay) closeSettings(); });
+})();
+
+initSymptomDriver();
 
 // 4 步 Stepper 与状态机映射：S0→1, S1→2, S2/S3→3, S4/S5→4；SAFETY_CUTOFF 停在 2
 function updateStepper(activeStep) {
@@ -820,21 +998,40 @@ function renderS1HTML() {
     `;
 }
 function symptomSubmit() {
+    if (symptomSubmitLocked) return;
     const el = document.getElementById('symptom-input');
     const val = el ? el.value.trim() : '';
     if (!val) { alert('请输入描述'); return; }
+    symptomSubmitLocked = true;
+    const btn = document.querySelector('#symptom-step-container button.search-button');
+    if (btn) { btn.disabled = true; btn.textContent = 'AI 正在整理…'; }
     const res = symptomSession.submitDescription(val);
-    if (res.state === 'SAFETY_CUTOFF') { renderSymptomState('SAFETY_CUTOFF', res.data); return; }
-    renderSymptomState('S2', res.data);
+    settle(res, function (r) {
+        if (r.state === 'SAFETY_CUTOFF') { renderSymptomState('SAFETY_CUTOFF', r.data); updateCloudStatus(); return; }
+        renderSymptomState('S2', r.data);
+        updateCloudStatus();
+    }, function () { symptomSubmitLocked = false; }, btn);
 }
 
-// S2 细节追问（双轨多组 · 多选 Checkbox · 每卡强制兜底）
+// S2 细节追问（双轨多组 · 多选 Checkbox · 每卡强制兜底 + 自定义补充入口）
 function renderS2HTML(data) {
-    const opts = (data.option_cards || []).map(c => `
+    const cards = data.option_cards || [];
+    const opts = cards.map(c => {
+        if (c.custom) {
+            // 自定义补充：checkbox + 文本输入，勾选后可自由描述选项之外的情况
+            return `
+        <label class="clarify-opt clarify-custom">
+            <input type="checkbox" data-tag="__CUSTOM__" onchange="toggleClarify(this); toggleCustomInput(this)">
+            <span>${c.label}</span>
+        </label>
+        <textarea id="clarify-custom-text" class="clarify-custom-input" placeholder="请描述你的情况（例如：饭后反酸、半夜容易醒）" rows="2" disabled style="width:100%; border:1px solid var(--border-color); border-radius:12px; padding:12px; font-size:14px; background:white; resize:none; margin-top:-4px"></textarea>`;
+        }
+        return `
         <label class="clarify-opt${c.negative ? ' clarify-neg' : ''}">
             <input type="checkbox" data-tag="${c.tag}" onchange="toggleClarify(this)">
             <span>${c.label}</span>
-        </label>`).join('');
+        </label>`;
+    }).join('');
     return `
         <div class="fade-in">
             <h2 style="text-align:center; margin-bottom:8px">补充细节（可多选）</h2>
@@ -843,7 +1040,7 @@ function renderS2HTML(data) {
                 <p style="font-weight:700; margin-bottom:16px; font-size:16px">${data.question_text || ''}</p>
                 <div id="clarify-cards" style="display:flex; flex-direction:column; gap:12px">${opts}</div>
                 <div style="margin-top:24px; display:flex; gap:16px; align-items:center; justify-content:center">
-                    <button class="search-button" onclick="symptomAnswerMulti()">确认选择</button>
+                    <button class="search-button" id="clarify-confirm-btn" onclick="symptomAnswerMulti()">确认选择</button>
                     <button class="ghost-btn" type="button" onclick="symptomBackToEdit()">← 返回修改描述</button>
                 </div>
                 <p style="font-size:12px; color:var(--text-muted); margin-top:16px; text-align:center">收敛分 ${data.convergence_score} · 无对应情况请勾选「以上均无」</p>
@@ -851,29 +1048,48 @@ function renderS2HTML(data) {
         </div>
     `;
 }
-// 多选排他：勾选兜底项则清空其它；勾选其它则清空兜底
+// 自定义输入框随 checkbox 启用 / 禁用
+function toggleCustomInput(box) {
+    const ta = document.getElementById('clarify-custom-text');
+    if (ta) ta.disabled = !box.checked;
+}
+// 多选排他：勾选兜底项则清空其它（含自定义）；勾选其它则清空兜底
 function toggleClarify(box) {
     const group = document.getElementById('clarify-cards');
     if (!group) return;
     const boxes = group.querySelectorAll('input[type=checkbox]');
     if (box.classList.contains('clarify-neg') || (box.parentElement && box.parentElement.classList.contains('clarify-neg'))) {
-        if (box.checked) boxes.forEach(b => { if (b !== box) b.checked = false; });
+        if (box.checked) boxes.forEach(b => {
+            if (b !== box) { b.checked = false; if (b.getAttribute('data-tag') === '__CUSTOM__') { const ta = document.getElementById('clarify-custom-text'); if (ta) ta.disabled = true; } }
+        });
     } else {
         boxes.forEach(b => { if ((b.parentElement && b.parentElement.classList.contains('clarify-neg')) || b.classList.contains('clarify-neg')) b.checked = false; });
     }
 }
-// S2 多选提交
+// S2 多选提交（含自定义自由文本）
 function symptomAnswerMulti() {
     if (symptomClarifyLocked) return;
     const group = document.getElementById('clarify-cards');
     if (!group) return;
-    const tags = Array.from(group.querySelectorAll('input[type=checkbox]:checked')).map(b => b.getAttribute('data-tag'));
+    const tags = [];
+    group.querySelectorAll('input[type=checkbox]:checked').forEach(b => {
+        const t = b.getAttribute('data-tag');
+        if (t === '__CUSTOM__') {
+            const ta = document.getElementById('clarify-custom-text');
+            const txt = (ta && ta.value || '').trim();
+            if (txt) tags.push('custom:' + txt);   // 自定义文本以 custom: 前缀透传，检索端自动忽略
+        } else {
+            tags.push(t);
+        }
+    });
     if (!tags.length) { alert('请至少选择一项；若无对应情况，请勾选「以上均无」。'); return; }
     symptomClarifyLocked = true;
+    const btn = document.getElementById('clarify-confirm-btn');
     const res = symptomSession.answer(tags);
-    if (res.state === 'S2') renderSymptomState('S2', res.data);
-    else if (res.state === 'S3') renderSymptomState('S3', res.data);
-    symptomClarifyLocked = false;
+    settle(res, function (r) {
+        if (r.state === 'S2') renderSymptomState('S2', r.data);
+        else if (r.state === 'S3') renderSymptomState('S3', r.data);
+    }, function () { symptomClarifyLocked = false; }, btn);
 }
 // S2 → S1：返回修改描述（保留并回显上一轮文字，允许增删）
 function symptomBackToEdit() {
@@ -908,10 +1124,15 @@ function renderS3HTML(data) {
     `;
 }
 function symptomConfirm() {
+    const btn = (function () { const bs = document.querySelectorAll('#symptom-step-container button.search-button'); return bs[bs.length - 1] || null; })();
+    if (btn) { btn.disabled = true; btn.textContent = 'AI 正在整理…'; }
     renderSymptomState('S4'); // 骨架屏瞬态（S4 检索加载）
     setTimeout(() => {
         const res = symptomSession.confirm();
-        renderSymptomState('S5', res.data);
+        settle(res, function (r) {
+            renderSymptomState('S5', r.data);
+            updateCloudStatus();
+        }, null, btn);
     }, 650);
 }
 function symptomEdit() {
@@ -954,14 +1175,6 @@ function renderS5HTML(data) {
             ${h.has_toxicity ? `<div class="report-herb-warn">${h.toxicity_warning || ''}</div>` : ''}
         </div>
     `).join('') : '<div class="report-content">暂无特别匹配的草本，建议从温和调理方向了解。</div>';
-    // L2 二级草本推荐（v1.48）：按相关性加权排序，独立于 L1 方剂结论
-    const recs = sec.herb_recommendation_section || [];
-    const recCards = recs.length ? recs.map(r => `
-        <div class="report-herb">
-            <div class="report-herb-name">${r.herb_name}<span class="relevance-tag" style="font-size:11px;color:var(--primary-green);border:1px solid var(--primary-green);border-radius:10px;padding:1px 8px;margin-left:6px">相关度 ${r.relevance_score}</span></div>
-            <div class="report-herb-desc">${r.oneLiner || ''}（${r.category} · ${r.property}）</div>
-        </div>
-    `).join('') : '<div class="report-content">暂无特别匹配的草本推荐。</div>';
     const habitItems = (life.habits || []).map(h => `<li>${h}</li>`).join('');
 
     return `
@@ -1014,11 +1227,6 @@ function renderS5HTML(data) {
             <div class="report-section">
                 <h5>相关草本知识</h5>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">${herbCards}</div>
-            </div>
-
-            <div class="report-section">
-                <h5>二级草本推荐（按相关性加权）</h5>
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">${recCards}</div>
             </div>
 
             <div class="report-section">

@@ -68,53 +68,6 @@
         };
     }
 
-    /* ============================ 0.5 二级精细化加权 · Herb 特征网格（v1.48 CPO 裁决） ============================ */
-    // L1 = 5D 方剂矩阵（不变，作为主路由）；L2 = Herb 级检索分支（动态相关性排序 + 报告渲染）。
-    // 脏腑类目 → 相关草本大类映射（用于把“身体信号归经”翻译成“本草方向”）
-    const ZANGFU_TO_HERB_CATS = {
-        xin_fei_xiong_xie: ['清热', '活血', '止咳', '养阴'],
-        gan_dan_yu_jie: ['理气', '清热', '活血'],
-        pi_wei_yun_hua: ['健脾', '化湿', '温里', '消食', '补气'],
-        shen_xi_shui_ye: ['补肾', '利水', '温里', '养阴'],
-        biao_zheng_wai_gan: ['解表', '清热']
-    };
-    // 构建 Herb 特征网格：按 大类 / 标签 / 临床方向 索引，供二级检索 O(1) 命中
-    function buildHerbMesh(kb) {
-        const herbs = (kb && kb.herbs) || [];
-        const byCategory = {};
-        herbs.forEach(h => {
-            const cat = h.category || '未分类';
-            (byCategory[cat] = byCategory[cat] || []).push(h);
-        });
-        return { herbs: herbs, byCategory: byCategory };
-    }
-    // L2 二级检索：给定归经类目 + 会话信号（中文标签），返回按相关性加权排序的草本推荐
-    function recommendHerbs(mesh, opts) {
-        opts = opts || {};
-        const categoryId = opts.categoryId || null;
-        const signals = opts.signals || [];
-        const topN = opts.topN || 6;
-        const targetCats = (categoryId && ZANGFU_TO_HERB_CATS[categoryId]) ? ZANGFU_TO_HERB_CATS[categoryId] : [];
-        const scored = (mesh.herbs || []).map(h => {
-            let score = 0;
-            if (targetCats.indexOf(h.category) >= 0) score += 10;       // 同本草大类（归经翻译后）优先
-            signals.forEach(s => {
-                if (!s) return;
-                if ((h.tags || []).indexOf(s) >= 0) score += 4;
-                if ((h.clinical_tags || []).indexOf(s) >= 0) score += 3;
-                if (h.category === s) score += 2;
-                if (h.name === s) score += 6;
-            });
-            if (score <= 0) return null;
-            return { herb: h, score: score };
-        }).filter(Boolean);
-        scored.sort((a, b) => (b.score - a.score) || a.herb.name.localeCompare(b.herb.name, 'zh'));
-        return scored.slice(0, topN).map(x => ({
-            herb_id: x.herb.id, herb_name: x.herb.name, category: x.herb.category,
-            property: x.herb.property, relevance_score: x.score, oneLiner: x.herb.oneLiner
-        }));
-    }
-
     // 收集语料库中出现过的所有维度（用于 missing_dimensions 计算）
     function collectAllDims(rag) {
         const set = new Set();
@@ -152,7 +105,10 @@
         });
     }
     // tag → 人类可读 label（供叙述 / 结论回显）
-    function tagLabel(tag, maps) { return (maps && maps.tagToLabel[tag]) || tag; }
+    function tagLabel(tag, maps) {
+        if (typeof tag === 'string' && tag.indexOf('custom:') === 0) return tag.slice('custom:'.length); // 剥离自定义前缀，回显用户原话
+        return (maps && maps.tagToLabel[tag]) || tag;
+    }
 
     function buildCtx(driver) {
         return {
@@ -163,7 +119,8 @@
             knowledge_base: getRag(),
             tag_maps: buildTagMaps(getRag()),
             red_list: RED_FLAGS,
-            forbidden_words: FORBIDDEN_WORDS
+            forbidden_words: FORBIDDEN_WORDS,
+            driver: (driver && driver.mode) || 'mock'
         };
     }
 
@@ -310,11 +267,12 @@
         if (!current) {
             return { should_continue: false, ask_dimension: null, ask_track: null, ask_key: null, question_text: '', option_cards: [], convergence_score: Number(score.toFixed(2)) };
         }
-        // 每个选项独立成 tag：兼容 {label,tag} 对象与纯字符串；强制追加兜底（负向）
+        // 每个选项独立成 tag：兼容 {label,tag} 对象与纯字符串；强制追加兜底（负向）+ 自定义补充入口
         const option_cards = (current.options || []).map(o => {
             if (o && typeof o === 'object') return { label: o.label || o.tag, tag: o.tag || o.label, negative: false };
             return { label: o, tag: o, negative: false };
-        }).concat([{ label: FALLBACK_LABEL, tag: FALLBACK_LABEL, negative: true }]);
+        }).concat([{ label: FALLBACK_LABEL, tag: FALLBACK_LABEL, negative: true }])
+          .concat([{ label: '我有其他情况要补充（可输入）', tag: '__CUSTOM__', custom: true, negative: false }]);
         return {
             should_continue: shouldContinue,
             ask_dimension: current.dim,
@@ -335,10 +293,16 @@
         const answered = input.answered || [];
         const posSelections = [];
         const negDims = [];
+        const seenSel = new Set();
         answered.forEach(a => {
             const tags = a.tags || [];
             const hasNeg = tags.some(isNegativeLabel);
-            tags.forEach(t => { if (!isNegativeLabel(t)) posSelections.push(tagLabel(t, ctx.tag_maps)); });
+            tags.forEach(t => {
+                if (!isNegativeLabel(t) && !seenSel.has(t)) {
+                    seenSel.add(t);
+                    posSelections.push(tagLabel(t, ctx.tag_maps));
+                }
+            });
             if (hasNeg) negDims.push(DIM_EXCLUDE_LABEL[a.dim] || '相关方面');
         });
         const primary = extracted.length ? extracted[0].standard : (posSelections[0] || '相关身体表现');
@@ -385,26 +349,26 @@
         const maps = ctx.tag_maps || buildTagMaps(rag);
         const selected = (input.selected_tags || []).filter(t => t !== FALLBACK_LABEL);
         const selectedSet = new Set(selected);
+        const candidates = (input.candidate_tags || []).filter(t => t !== FALLBACK_LABEL && !selectedSet.has(t));
+        const candidateSet = new Set(candidates);
         const detectedCat = input.category_id || null;
-
-        // —— L2 二级精细化加权：Herb 特征网格检索（不改动 L1 五D 矩阵结论，仅追加 herb_recommendations） ——
-        const mesh = buildHerbMesh(kb);
-        const sigLabels = selected.map(t => tagLabel(t, maps));
-        const detectedCatName = (getRag().categories || []).find(c => c.id === detectedCat);
-        if (detectedCatName) sigLabels.push(detectedCatName.name);
-        const herbRecommendations = recommendHerbs(mesh, { categoryId: detectedCat, signals: sigLabels, topN: 6 });
 
         // —— 5D 加权矩阵：Score = Σ专病Tag×25 + Σ十问Tag×15 − Σ相克Tag×20 ——
         let best = null;
         (rag.categories || []).forEach(cat => {
             (cat.formulas || []).forEach(f => {
-                const zhuan = (f.zhuan_tags || []).filter(t => selectedSet.has(t));
-                const shiwen = (f.shiwen_tags || []).filter(t => selectedSet.has(t));
-                const incompat = (f.incompatible_tags || []).filter(t => selectedSet.has(t));
-                const score = zhuan.length * W_ZHUAN + shiwen.length * W_SHIWEN - incompat.length * W_INCOMPAT;
+                const zhuanSel = (f.zhuan_tags || []).filter(t => selectedSet.has(t));
+                const shiwenSel = (f.shiwen_tags || []).filter(t => selectedSet.has(t));
+                const incompatSel = (f.incompatible_tags || []).filter(t => selectedSet.has(t));
+                // 候选 tag（LLM 预测但未直接勾选）作为软命中，权重降低，用于提升未精准归经时的召回
+                const zhuanCand = (f.zhuan_tags || []).filter(t => candidateSet.has(t));
+                const shiwenCand = (f.shiwen_tags || []).filter(t => candidateSet.has(t));
+                const score = zhuanSel.length * W_ZHUAN + shiwenSel.length * W_SHIWEN - incompatSel.length * W_INCOMPAT
+                    + zhuanCand.length * (W_ZHUAN / 2) + shiwenCand.length * (W_SHIWEN / 2);
                 const cand = {
                     cat: cat, formula: f, score: score,
-                    zhuan: zhuan, shiwen: shiwen, incompat: incompat,
+                    zhuan: zhuanSel, shiwen: shiwenSel, incompat: incompatSel,
+                    zhuan_candidate: zhuanCand, shiwen_candidate: shiwenCand,
                     inDetected: (cat.id === detectedCat),
                     primary: (cat.primary_formula_id === f.id)
                 };
@@ -439,7 +403,6 @@
                         composition: []
                     },
                     matched_herbs: [],
-                    herb_recommendations: herbRecommendations,
                     bias_conclusion: {
                         category_id: null, category_name: '待归经', formula_name: '整体辨证调理方向',
                         score: 0, matched_zhuan_tags: [], matched_shiwen_tags: [], low_confidence: true,
@@ -494,7 +457,6 @@
                     fruit: formula.fruit, habit: formula.habit
                 },
                 matched_herbs: herbs,
-                herb_recommendations: herbRecommendations,
                 bias_conclusion: {
                     category_id: cat.id, category_name: cat.name,
                     formula_name: formula.formula_name, source_book: formula.source_book,
@@ -557,7 +519,6 @@
             },
             composition_chips: compositionChips,
             herb_knowledge_section: herbs,
-            herb_recommendation_section: (kp.herb_recommendations || []),
             dietary_guidance_section: { fruit_advice: advice.fruit_guidance || '', drink_advice: advice.habit_guidance || '' },
             lifestyle_guidance_section: { habits: (advice.habit_guidance || '').split('。').map(s => s.trim()).filter(Boolean) },
             plain_text_copy_payload: [tcm_explanation, doctor_brief,
@@ -601,8 +562,16 @@
     function getDriver(mode) {
         mode = mode || (typeof window !== 'undefined' && window.__AGENT_DRIVER__) || 'mock';
         if (mode === 'cloud') {
-            // 未来实现：CloudAPIDriver（需 API Key + 极小后端代理，密钥不下发前端）
-            throw new Error('CloudAPIDriver 尚未实现：需配置 API Key 与后端代理（详见 contracts/mock-driver.md §4）。');
+            // CloudAPIDriver 由 drivers/cloud-driver.js 注入（window/globalThis），
+            // 密钥仅来自前端 localStorage（tcm_api_key），源码零硬编码。
+            var CloudDriver =
+                (typeof window !== 'undefined' && window.CloudAPIDriver) ||
+                (typeof globalThis !== 'undefined' && globalThis.CloudAPIDriver) ||
+                (typeof CloudAPIDriver !== 'undefined' ? CloudAPIDriver : null);
+            if (!CloudDriver) {
+                throw new Error('CloudAPIDriver 未加载：请确认 drivers/cloud-driver.js 已在 agent-engine.js 之后引入。');
+            }
+            return new CloudDriver();
         }
         return new LocalMockDriver();
     }
@@ -610,6 +579,7 @@
     /* ============================ 5. 状态机会话编排（S0~S6） ============================ */
     function SymptomSession(driver) {
         this.driver = driver || getDriver('mock');
+        this.async = !!(this.driver && this.driver.async);   // CloudAPIDriver=true；LocalMockDriver 不存在该字段 → 同步
         this.reset();
     }
     SymptomSession.prototype.reset = function () {
@@ -627,10 +597,25 @@
         this.confirmation = null;
         this.knowledge = null;
         this.report = null;
+        // 云端连接状态（仅 CloudAPIDriver 有意义）：'unknown' | 'ok' | 'degraded'
+        this.cloudStatus = 'unknown';
+        this.cloudError = '';
+        this.askedDimensions = [];    // 云端动态追问：已问过的维度，避免重复
         this.ctx = buildCtx(this.driver);
+    };
+    // 记录一次 LLM 技能（extractor/formatter）的调用结果，供前端展示「接通 / 降级」状态
+    SymptomSession.prototype._recordCloud = function (result) {
+        if (!result || typeof result !== 'object') return;
+        if (result.fallback_used) {
+            this.cloudStatus = 'degraded';
+            this.cloudError = (result.meta && result.meta.cloud_error) || '未知错误';
+        } else if (result.ok) {
+            if (this.cloudStatus !== 'degraded') this.cloudStatus = 'ok';
+        }
     };
     // S0 → S1：用户提交描述
     SymptomSession.prototype.submitDescription = function (text) {
+        if (this.async) return this._submitAsync(text);
         this.desc = (text || '').trim();
         this.extracted = [];
         this.answered = [];
@@ -659,8 +644,43 @@
         this.state = 'S2';
         return { state: 'S2', data: cl };
     };
+    // 异步分支（CloudAPIDriver）：每个 invoke 返回 Promise，统一 await
+    SymptomSession.prototype._submitAsync = async function (text) {
+        this.desc = (text || '').trim();
+        this.extracted = [];
+        this.answered = [];
+        this.round = 0;
+        this.queueIndex = 0;
+        this.currentDim = null;
+        this.currentOptions = [];
+        const shield = (await this.driver.invoke('safety_shield', this.ctx, { user_raw_input: this.desc })).data;
+        if (shield.blocked) { this.state = 'SAFETY_CUTOFF'; return { state: 'SAFETY_CUTOFF', data: shield }; }
+        const ext = await this.driver.invoke('extractor', this.ctx, { user_raw_input: this.desc, historical_symptoms: [] });
+        this._recordCloud(ext);
+        this.extracted = ext.data.extracted_symptoms;
+        this.coveredDimensions = ext.data.covered_dimensions;
+        this.missingDimensions = ext.data.missing_dimensions || [];
+        this.candidateTags = ext.data.candidate_tags || [];
+        this.categoryId = ext.data.detected_category;
+        this.clarifyQueue = buildClarifyQueue(ext.data, getRag());
+        this.round = 1;
+        this.askedDimensions = [];
+        const cl = (await this.driver.invoke('clarifier', this.ctx, {
+            covered_dimensions: this.coveredDimensions, current_round: this.round,
+            clarify_queue: this.clarifyQueue, queue_index: this.queueIndex,
+            user_raw_input: this.desc, extracted: this.extracted, answered: [], max_rounds: MAX_ROUNDS,
+            asked_dimensions: this.askedDimensions,
+            candidate_tags: (ext.data && ext.data.candidate_tags) || [],
+            missing_dimensions: (ext.data && ext.data.missing_dimensions) || []
+        })).data;
+        this.currentDim = cl.ask_dimension;
+        this.currentOptions = cl.option_cards;
+        this.state = 'S2';
+        return { state: 'S2', data: cl };
+    };
     // S2：用户多选提交（tags 为数组；兼容单字符串 / 标签或 tag 混用）
     SymptomSession.prototype.answer = function (tags) {
+        if (this.async) return this._answerAsync(tags);
         if (typeof tags === 'string') tags = [tags];
         tags = normalizeTags((tags || []).slice(), this.ctx.tag_maps);
         const hasNeg = tags.some(isNegativeLabel);
@@ -679,8 +699,60 @@
         this.state = 'S2';
         return { state: 'S2', data: cl };
     };
+    SymptomSession.prototype._answerAsync = async function (tags) {
+        if (typeof tags === 'string') tags = [tags];
+        tags = normalizeTags((tags || []).slice(), this.ctx.tag_maps);
+        const hasNeg = tags.some(isNegativeLabel);
+        this.answered.push({ dim: this.currentDim, tags: tags, negative: hasNeg });
+        if (this.currentDim && this.askedDimensions.indexOf(this.currentDim) < 0) this.askedDimensions.push(this.currentDim);
+        this.round += 1;
+        this.queueIndex += 1;
+        if (this.round >= MAX_ROUNDS) return await this._synthesizeAsync();
+        const cl = (await this.driver.invoke('clarifier', this.ctx, {
+            covered_dimensions: this.coveredDimensions, current_round: this.round,
+            clarify_queue: this.clarifyQueue, queue_index: this.queueIndex,
+            user_raw_input: this.desc, extracted: this.extracted, answered: this.answered, max_rounds: MAX_ROUNDS,
+            asked_dimensions: this.askedDimensions,
+            candidate_tags: this.candidateTags || [],
+            missing_dimensions: this.missingDimensions || []
+        })).data;
+        if (!cl.should_continue) return await this._synthesizeAsync();
+        this.currentDim = cl.ask_dimension;
+        this.currentOptions = cl.option_cards;
+        this.state = 'S2';
+        return { state: 'S2', data: cl };
+    };
     SymptomSession.prototype._synthesize = function () {
         const syn = this.driver.invoke('synthesizer', this.ctx, { extracted_symptoms: this.extracted, answered: this.answered }).data;
+        this.confirmation = syn;
+        this.state = 'S3';
+        return { state: 'S3', data: syn };
+    };
+    SymptomSession.prototype._synthesizeAsync = async function () {
+        // 云端动态追问可能导致同类 tag 被重复勾选，收敛前按 (dim, tag) 去重，保证报告不重复罗列
+        const seenTag = new Set();
+        const seenNegDim = new Set();
+        const deduped = [];
+        (this.answered || []).forEach(a => {
+            const dim = a.dim || '_';
+            const tags = [];
+            (a.tags || []).forEach(t => {
+                if (isNegativeLabel(t)) {
+                    if (!seenNegDim.has(dim)) {
+                        seenNegDim.add(dim);
+                        tags.push(t);
+                    }
+                } else {
+                    const key = dim + ':' + t;
+                    if (!seenTag.has(key)) {
+                        seenTag.add(key);
+                        tags.push(t);
+                    }
+                }
+            });
+            if (tags.length) deduped.push({ dim: dim, tags: tags, negative: tags.some(isNegativeLabel) });
+        });
+        const syn = (await this.driver.invoke('synthesizer', this.ctx, { extracted_symptoms: this.extracted, answered: deduped })).data;
         this.confirmation = syn;
         this.state = 'S3';
         return { state: 'S3', data: syn };
@@ -692,11 +764,19 @@
     };
     // S3 → S4 → S5：确认后检索 + 渲染（S4 为骨架屏瞬态，业务侧处理）
     SymptomSession.prototype.confirm = function () {
+        if (this.async) return this._confirmAsync();
         const p = this.confirmation && this.confirmation.ui_card_payload;
         // 汇总已选有效 Tag（排除兜底项），供 5D 加权矩阵评分
         const selectedTags = [];
         this.answered.forEach(a => { if (!a.negative) (a.tags || []).forEach(t => { if (t !== FALLBACK_LABEL) selectedTags.push(t); }); });
-        const ret = this.driver.invoke('retriever', this.ctx, { category_id: this.categoryId, selected_tags: selectedTags }).data;
+        // 检索增强：把抽取阶段 LLM 预测的候选 tag 作为软命中字段传入，不混入用户已选标签
+        const candidateTags = [];
+        (this.extracted || []).forEach(function (e) {
+            (e.candidate_tags || []).forEach(function (t) {
+                if (t !== FALLBACK_LABEL && candidateTags.indexOf(t) < 0) candidateTags.push(t);
+            });
+        });
+        const ret = this.driver.invoke('retriever', this.ctx, { category_id: this.categoryId, selected_tags: selectedTags, candidate_tags: candidateTags }).data;
         this.knowledge = ret;
         const fmt = this.driver.invoke('formatter', this.ctx, {
             synthesized_symptom_text: p.synthesized_symptom_text,
@@ -707,6 +787,30 @@
         this.report = fmt;
         this.state = 'S5'; // S4（检索加载）由 UI 瞬态表现
         return { state: 'S5', data: fmt };
+    };
+    SymptomSession.prototype._confirmAsync = async function () {
+        const p = this.confirmation && this.confirmation.ui_card_payload;
+        const selectedTags = [];
+        this.answered.forEach(a => { if (!a.negative) (a.tags || []).forEach(t => { if (t !== FALLBACK_LABEL) selectedTags.push(t); }); });
+        // 检索增强：把抽取阶段 LLM 预测的候选 tag 作为软命中字段传入，不混入用户已选标签
+        const candidateTags = [];
+        (this.extracted || []).forEach(function (e) {
+            (e.candidate_tags || []).forEach(function (t) {
+                if (t !== FALLBACK_LABEL && candidateTags.indexOf(t) < 0) candidateTags.push(t);
+            });
+        });
+        const ret = (await this.driver.invoke('retriever', this.ctx, { category_id: this.categoryId, selected_tags: selectedTags, candidate_tags: candidateTags })).data;
+        this.knowledge = ret;
+        const fmt = await this.driver.invoke('formatter', this.ctx, {
+            synthesized_symptom_text: p.synthesized_symptom_text,
+            primary_symptom: p.primary_symptom,
+            answered: this.answered,
+            knowledge_payload: ret.knowledge_payload
+        });
+        this._recordCloud(fmt);
+        this.report = fmt.data;
+        this.state = 'S5';
+        return { state: 'S5', data: fmt.data };
     };
     SymptomSession.prototype.restart = function () { this.reset(); return { state: 'S0' }; };
 
@@ -721,9 +825,6 @@
         DISCLAIMER: DISCLAIMER,
         FALLBACK_LABEL: FALLBACK_LABEL,
         getRag: getRag,
-        buildHerbMesh: buildHerbMesh,
-        recommendHerbs: recommendHerbs,
-        ZANGFU_TO_HERB_CATS: ZANGFU_TO_HERB_CATS,
         LocalMockDriver: LocalMockDriver,
         getDriver: getDriver,
         SymptomSession: SymptomSession
