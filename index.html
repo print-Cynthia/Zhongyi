@@ -29,22 +29,25 @@
         </div>
     </header>
 
-    <!-- 设置弹窗（轻量）：API Key 仅存浏览器 localStorage，源码零硬编码 -->
+    <!-- 设置弹窗（轻量）：正式版前端零密钥；仅 CPO 本地调试（allowDevKeyInput=true）才显示「填 Key」入口 -->
     <div class="settings-overlay" id="settings-overlay" hidden>
         <div class="settings-modal" role="dialog" aria-modal="true" aria-label="设置">
             <div class="settings-head">
                 <h3>设置 · 云端大模型</h3>
                 <button class="settings-close" type="button" onclick="closeSettings()" aria-label="关闭">×</button>
             </div>
-            <p class="settings-desc">填入阿里云百炼（DashScope）API Key 即可启用真实语义抽取与通俗报告生成。密钥仅保存在<strong>本机浏览器</strong>（localStorage），不会上传任何服务器，也不会写入代码仓库。</p>
-            <label class="settings-label" for="apikey-input">API Key</label>
-            <input type="password" id="apikey-input" class="settings-input" placeholder="例如 sk-..." autocomplete="off" spellcheck="false">
-            <div class="settings-status" id="settings-status"></div>
-            <div class="settings-actions">
-                <button class="ghost-btn" type="button" onclick="clearSettings()">清除密钥</button>
-                <button class="search-button" type="button" onclick="saveSettings()">保存并启用</button>
+            <p class="settings-desc" id="settings-devdesc">本地调试模式：填入阿里云百炼（DashScope）API Key 即可启用真实语义抽取与通俗报告生成。密钥仅保存在<strong>本机浏览器</strong>（localStorage），不会上传任何服务器，也不会写入代码仓库。</p>
+            <p class="settings-desc" id="settings-proxymsg" hidden></p>
+            <div id="settings-keyblock">
+                <label class="settings-label" for="apikey-input">API Key（仅本地调试）</label>
+                <input type="password" id="apikey-input" class="settings-input" placeholder="例如 sk-..." autocomplete="off" spellcheck="false">
+                <div class="settings-status" id="settings-status"></div>
+                <div class="settings-actions">
+                    <button class="ghost-btn" type="button" onclick="clearSettings()">清除密钥</button>
+                    <button class="search-button" type="button" onclick="saveSettings()">保存并启用</button>
+                </div>
+                <p class="settings-note">未配置密钥时，系统自动使用本地演示引擎（LocalMockDriver），功能完整、永不报错。配置后建议刷新「身体信号整理」页面以重建会话。</p>
             </div>
-            <p class="settings-note">未配置密钥时，系统自动使用本地演示引擎（LocalMockDriver），功能完整、永不报错。配置后建议刷新「身体信号整理」页面以重建会话。</p>
         </div>
     </div>
 
@@ -176,12 +179,13 @@
     <script src="data.js"></script>
     <script src="database/herbs_rag_db.js"></script>
     <script src="agent-engine.js"></script>
+    <script src="config.js"></script>
     <script src="drivers/cloud-driver.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="script.js"></script>
 
     <!-- 版本号徽标（每次改动 +1，方便识别当前版本） -->
-    <div class="version-badge" id="version-badge" title="当前页面版本">v1.50</div>
+    <div class="version-badge" id="version-badge" title="当前页面版本">v1.51</div>
     <!-- 页脚免责声明：底部水平居中 -->
     <p class="disclaimer">本产品仅供中医药知识学习与症状整理参考，不构成医疗诊断或处方建议。</p>
 </body>

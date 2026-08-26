@@ -759,11 +759,18 @@ let symptomSession = null;
 let symptomClarifyLocked = false;
 let lastReportData = null;
 
-// 按 localStorage 是否存在 API Key 自动选择 mock / cloud 驱动；
-// 无密钥或云端请求异常时，CloudAPIDriver 内部静默降级到 LocalMockDriver，永不中断。
+// 根据 config.js（llmProxyUrl / allowDevKeyInput）与可选的本地调试密钥，自动选择 mock / cloud 驱动；
+// 无代理且无本地调试密钥时，CloudAPIDriver 内部静默降级到 LocalMockDriver，永不中断。
+function isCloudEnabled() {
+    try {
+        var c = (window.TCM_CONFIG) || {};
+        if (typeof c.llmProxyUrl === 'string' && c.llmProxyUrl.trim()) return true;
+        if (c.allowDevKeyInput !== false && typeof localStorage !== 'undefined' && localStorage.getItem('tcm_api_key')) return true;
+    } catch (e) {}
+    return false;
+}
 function initSymptomDriver() {
-    let cloud = false;
-    try { if (typeof localStorage !== 'undefined' && localStorage.getItem('tcm_api_key')) cloud = true; } catch (e) {}
+    const cloud = isCloudEnabled();
     window.__AGENT_DRIVER__ = cloud ? 'cloud' : 'mock';
     try {
         symptomSession = new SymptomAgentEngine.SymptomSession(SymptomAgentEngine.getDriver(cloud ? 'cloud' : 'mock'));
@@ -827,6 +834,7 @@ function updateDriverMode() { updateCloudStatus(); }
 function friendlyCloudError(raw) {
     raw = String(raw || '');
     if (raw.indexOf('NO_API_KEY') >= 0) return '未配置 API Key';
+    if (raw.indexOf('NO_PROXY_AND_NO_DEV') >= 0) return '未配置云端代理且无本地密钥';
     if (raw.indexOf('NO_FETCH') >= 0) return '当前浏览器不支持网络请求';
     if (raw.indexOf('API_HTTP_401') >= 0) return '密钥无效或无权限（401）';
     if (raw.indexOf('API_HTTP_403') >= 0) return '密钥无权限（403）';
@@ -848,26 +856,25 @@ function updateCloudStatus() {
     const badge = document.getElementById('driver-mode');
     const note = document.getElementById('cloud-status-note');
     if (!badge) return;
-    let key = false;
-    try { key = !!(typeof localStorage !== 'undefined' && localStorage.getItem('tcm_api_key')); } catch (e) {}
+    const enabled = isCloudEnabled();
     const st = (symptomSession && symptomSession.cloudStatus) || 'unknown';
     const err = (symptomSession && symptomSession.cloudError) || '';
 
-    if (!key) {
+    if (!enabled) {
         badge.textContent = '本地演示';
         badge.className = 'driver-mode';
-        badge.title = '未配置 API Key，使用本地演示引擎（点右上角 ⚙ 可填写）';
+        badge.title = '未配置云端代理（前端零密钥）：使用本地演示引擎。如需 AI，由管理员配置后端代理。';
         if (note) { note.hidden = true; note.className = 'cloud-status-note'; note.textContent = ''; }
         return;
     }
     if (st === 'ok') {
         badge.textContent = '云端大模型 · 已接通';
         badge.className = 'driver-mode cloud ok';
-        badge.title = '已接入云端大模型（qwen-turbo）：语义抽取与报告润色由 AI 完成';
+        badge.title = '已接入云端大模型（经后端代理）：语义抽取与报告润色由 AI 完成，前端零密钥。';
         if (note) {
             note.hidden = false;
             note.className = 'cloud-status-note ok';
-            note.textContent = '✅ 已接入云端大模型：语义抽取与最终报告润色由 AI 生成。';
+            note.textContent = '✅ 已接入云端大模型（经后端代理）：语义抽取与最终报告润色由 AI 生成。';
         }
     } else if (st === 'degraded') {
         const reason = friendlyCloudError(err);
@@ -877,27 +884,49 @@ function updateCloudStatus() {
         if (note) {
             note.hidden = false;
             note.className = 'cloud-status-note degraded';
-            note.textContent = '⚠️ 云端未接通，已自动退回本地演示。原因：' + reason + '。如需稳定直连，建议加后端代理（点 ⚙ 可重新配置密钥）。';
+            note.textContent = '⚠️ 云端未接通，已自动退回本地演示。原因：' + reason + '。若为后端代理问题，请检查代理是否运行、服务端密钥是否配置。';
         }
     } else {
         badge.textContent = '云端大模型 · 待验证';
         badge.className = 'driver-mode cloud pending';
-        badge.title = '已配置密钥，提交描述后将自动验证云端连接';
+        badge.title = '已接入云端代理，提交描述后将自动验证连接';
         if (note) {
             note.hidden = false;
             note.className = 'cloud-status-note pending';
-            note.textContent = '已配置 API Key，提交描述后将自动验证云端连接…';
+            note.textContent = '已接入云端代理，提交描述后将自动验证云端连接…';
         }
     }
 }
 
-// —— 设置弹窗：API Key 仅存本机 localStorage，源码零硬编码 ——
+// —— 设置弹窗：正式版前端零密钥；仅 CPO 本地调试（allowDevKeyInput=true）才显示「填 Key」入口 ——
+function settingsAllowsDevKey() {
+    try { return (window.TCM_CONFIG && window.TCM_CONFIG.allowDevKeyInput) !== false; } catch (e) { return false; }
+}
 function openSettings() {
     const overlay = document.getElementById('settings-overlay');
     if (!overlay) return;
-    const input = document.getElementById('apikey-input');
+    const keyBlock = document.getElementById('settings-keyblock');
+    const proxyMsg = document.getElementById('settings-proxymsg');
+    const devDesc = document.getElementById('settings-devdesc');
     const status = document.getElementById('settings-status');
-    if (input && typeof localStorage !== 'undefined') input.value = localStorage.getItem('tcm_api_key') || '';
+
+    const proxySet = !!(window.TCM_CONFIG && typeof window.TCM_CONFIG.llmProxyUrl === 'string' && window.TCM_CONFIG.llmProxyUrl.trim());
+    const allowDev = settingsAllowsDevKey();
+
+    if (keyBlock) keyBlock.hidden = !allowDev;
+    if (devDesc) devDesc.hidden = !allowDev;
+    if (proxyMsg) {
+        proxyMsg.hidden = allowDev;
+        if (!allowDev) {
+            proxyMsg.textContent = proxySet
+                ? '云端 AI 已由站点管理员统一接入（后端代理已配置），无需、也无法在此填写密钥。'
+                : '当前为本地演示模式（未配置云端代理）。如需启用 AI，请联系管理员配置后端代理。';
+        }
+    }
+    if (allowDev) {
+        const input = document.getElementById('apikey-input');
+        if (input && typeof localStorage !== 'undefined') input.value = localStorage.getItem('tcm_api_key') || '';
+    }
     if (status) status.textContent = '';
     overlay.hidden = false;
 }
@@ -906,6 +935,7 @@ function closeSettings() {
     if (overlay) overlay.hidden = true;
 }
 function saveSettings() {
+    if (!settingsAllowsDevKey()) { closeSettings(); return; }
     const input = document.getElementById('apikey-input');
     const status = document.getElementById('settings-status');
     const val = (input && input.value || '').trim();
@@ -917,6 +947,7 @@ function saveSettings() {
     setTimeout(closeSettings, 1000);
 }
 function clearSettings() {
+    if (!settingsAllowsDevKey()) { closeSettings(); return; }
     try { localStorage.removeItem('tcm_api_key'); } catch (e) {}
     window.__AGENT_DRIVER__ = 'mock';
     initSymptomDriver();

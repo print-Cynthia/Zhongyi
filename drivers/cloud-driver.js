@@ -1,18 +1,18 @@
 /**
- * drivers/cloud-driver.js — 身体信号整理 · 云端大模型驱动（CloudAPIDriver）v1.49
+ * drivers/cloud-driver.js — 身体信号整理 · 云端大模型驱动（CloudAPIDriver）v1.51
  *
  * ┌─────────────────────────────────────────────────────────────────────────┐
  * │ 安全红线（CPO 综合架构指令，严格执行）                                    │
  * │ 1. 源码绝对零凭证：任何 API Key / 账号敏感信息均不得硬编码、不得写入     │
- * │    注释或 Mock 数据。本地凭证仅由前端界面手动输入，存于浏览器            │
- * │    localStorage（键名 tcm_api_key）。本文件不含任何真实密钥。            │
+ * │    注释或 Mock 数据。前端永不直接持有密钥；所有大模型调用改由「你的      │
+ * │    后端代理」转发，密钥只活在你的服务器环境变量里。本文件不含任何密钥。  │
  * │ 2. Payload 脱敏：每次请求体仅包含「主诉文本 / 会话文本」与「检索命中的  │
  * │    静态知识」（典籍方剂、草本，属公开知识库，非用户 PII）。严禁附加设备  │
  * │    信息、IP、姓名、年龄等任何个人标识。                                  │
- * │ 3. 设计取舍说明：CPO 指令明确采用「前端输入 + localStorage」方案以支撑   │
- * │    个人 / 本地验证。浏览器直连厂商会令密钥暴露给客户端，仅适用于个人    │
- * │    本地使用；若上线为多用户生产环境，须按契约 mock-driver.md §4 改为    │
- * │    「极小后端代理」模式（密钥不下发前端）。本文件已将此约束以注释固化。  │
+ * │ 3. 架构（CPO 指令·正式版）：前端只把问题 POST 到 config.js 里的         │
+ * │    llmProxyUrl（你的后端代理）；代理侧注入阿里云密钥并转发。普通用户     │
+ * │    看不到、也填不了任何密钥。本地调试用的「填 Key」入口由 allowDevKey   │
+ * │    Input 开关控制，正式上线务必关闭。本文件已将此约束以注释固化。         │
  * └─────────────────────────────────────────────────────────────────────────┘
  *
  * 架构：Selective LLM（大模型负责抽取与润色，确定性引擎负责检索与安全）
@@ -33,14 +33,32 @@
 })(typeof self !== 'undefined' ? self : this, function () {
     'use strict';
 
-    /* ============================ 0. 配置（源码零凭证，密钥仅来自 localStorage） ============================ */
+    /* ============================ 0. 配置（源码零凭证；密钥只在你的后端代理 / 本地调试开关里） ============================ */
     var PROVIDER = 'aliyun-dashscope';
-    var BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+    // 本地调试直连地址（仅当 allowDevKeyInput=true 且未配代理时启用；正式环境不会走到这里）
+    var DEV_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
     var DEFAULT_MODEL = 'qwen-turbo';
-    var API_KEY_STORAGE_KEY = 'tcm_api_key';     // 仅此一处声明键名，密钥值运行时从 localStorage 读取
+    // 本地调试密钥存储键（仅 CPO 本机调试用；allowDevKeyInput=false 时永不读取）
+    var DEV_API_KEY_STORAGE_KEY = 'tcm_api_key';
     var DEFAULT_TIMEOUT_MS = 15000;              // 超时即降级，保证演示/测试环境永不卡死
     // 兜底负向选项（与 agent-engine.js 的 FALLBACK_LABEL 保持一致）
     var FALLBACK_LABEL = '以上均无 / 无上述情况';
+
+    /* ============================ 0.1 配置读取（前端零密钥：优先走后端代理，其次本地调试开关） ============================ */
+    function getTcmConfig() {
+        var c = (typeof window !== 'undefined' && window.TCM_CONFIG) || {};
+        return {
+            proxyUrl: (typeof c.llmProxyUrl === 'string') ? c.llmProxyUrl.trim() : '',
+            allowDevKeyInput: c.allowDevKeyInput !== false
+        };
+    }
+    function getProxyUrl() { return getTcmConfig().proxyUrl; }
+    function allowDevKeyInput() { return getTcmConfig().allowDevKeyInput; }
+    // 仅本地调试路径读取本机密钥；正式环境（allowDevKeyInput=false）此函数不会被调用到
+    function getDevApiKey() {
+        try { if (typeof localStorage !== 'undefined') return localStorage.getItem(DEV_API_KEY_STORAGE_KEY) || ''; } catch (e) {}
+        return '';
+    }
 
     // 5 个标准脏腑方向（与 agent-engine.js 的 FEATURE_TAXONOMY / herbs_rag_db 的 category.id 对齐）
     // 大模型仅从这 6 个取值中选，确定性引擎据此映射到内部 category.id，确保下游 5D 矩阵无缝衔接。
@@ -70,26 +88,37 @@
         return new eng.LocalMockDriver();
     }
 
-    /* ============================ 2. 密钥读取（仅 localStorage） ============================ */
-    function getApiKey() {
-        try {
-            if (typeof localStorage !== 'undefined') {
-                return localStorage.getItem(API_KEY_STORAGE_KEY) || '';
-            }
-        } catch (e) { /* 隐私模式 / 不可用时视为未配置 */ }
-        return '';
+    /* ============================ 2. 配置判定（前端零密钥） ============================ */
+    // 正式路径：后端代理地址已配置即可（密钥在代理侧，前端不知）。
+    // 本地调试路径：allowDevKeyInput 开启且本机存有调试密钥。
+    // 其余情况视为未配置，调用方应静默降级到 LocalMockDriver。
+    function hasConfig() {
+        if (getProxyUrl()) return true;
+        if (allowDevKeyInput() && getDevApiKey()) return true;
+        return false;
     }
-    function hasConfig() { return !!getApiKey(); }
 
     /* ============================ 3. 脱敏的 Chat Completions 调用 ============================ */
     // 仅向厂商发送「主诉/对话文本 + 检索知识」，不附带任何设备/IP/PII 字段。
     function chatComplete(opts) {
         opts = opts || {};
-        var apiKey = getApiKey();
-        if (!apiKey) throw new Error('NO_API_KEY');
+        var proxyUrl = getProxyUrl();
+        var headers = { 'Content-Type': 'application/json' };
+        var url;
+        if (proxyUrl) {
+            // 正式路径：前端只把问题发到自己的后端代理；代理侧注入阿里云密钥并转发。前端零密钥、零 Authorization。
+            url = proxyUrl;
+        } else if (allowDevKeyInput()) {
+            // 仅 CPO 本地调试：浏览器直连阿里云（密钥仅存本机浏览器，不进代码）。allowDevKeyInput=false 时此分支不可达。
+            var devKey = getDevApiKey();
+            if (!devKey) throw new Error('NO_API_KEY');
+            url = DEV_BASE_URL + '/chat/completions';
+            headers['Authorization'] = 'Bearer ' + devKey;
+        } else {
+            throw new Error('NO_PROXY_AND_NO_DEV');
+        }
         if (typeof fetch !== 'function') throw new Error('NO_FETCH');
 
-        var url = BASE_URL + '/chat/completions';
         var timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
         var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         var body = {
@@ -102,11 +131,7 @@
 
         var fetchPromise = fetch(url, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey
-                // 注意：不发送任何自定义设备/用户标识头，满足脱敏红线
-            },
+            headers: headers,
             body: JSON.stringify(body),
             signal: controller ? controller.signal : undefined
         }).then(function (resp) {
@@ -614,7 +639,7 @@
         this.async = true;                 // 关键：会话层据此判断走同步/异步双分支
         this.model = opts.model || DEFAULT_MODEL;
         this.provider = PROVIDER;
-        this.baseUrl = opts.baseUrl || BASE_URL;
+        this.baseUrl = opts.baseUrl || getProxyUrl() || '';
         this.timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
     }
 
@@ -670,13 +695,11 @@
     return {
         CloudAPIDriver: CloudAPIDriver,
         PROVIDER: PROVIDER,
-        BASE_URL: BASE_URL,
+        DEV_BASE_URL: DEV_BASE_URL,
         DEFAULT_MODEL: DEFAULT_MODEL,
-        API_KEY_STORAGE_KEY: API_KEY_STORAGE_KEY,
         NAME_TO_ID: NAME_TO_ID,
         FALLBACK_LABEL: FALLBACK_LABEL,
         hasConfig: hasConfig,
-        getApiKey: getApiKey,
         // 暴露给冒烟测试的内部工具
         _extractJSON: extractJSON,
         _adaptExtractorLLM: adaptExtractorLLM,

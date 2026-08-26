@@ -563,7 +563,7 @@
         mode = mode || (typeof window !== 'undefined' && window.__AGENT_DRIVER__) || 'mock';
         if (mode === 'cloud') {
             // CloudAPIDriver 由 drivers/cloud-driver.js 注入（window/globalThis），
-            // 密钥仅来自前端 localStorage（tcm_api_key），源码零硬编码。
+            // 前端零密钥：生产环境密钥只在你的后端代理（config.js → llmProxyUrl）侧，源码零硬编码。
             var CloudDriver =
                 (typeof window !== 'undefined' && window.CloudAPIDriver) ||
                 (typeof globalThis !== 'undefined' && globalThis.CloudAPIDriver) ||
