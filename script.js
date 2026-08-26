@@ -270,8 +270,16 @@ function renderLibFilters() {
 
 function filterByCategory(cat, el) {
     closeAllSuggestions();
+    const alreadyActive = el.classList.contains('active');
+    const allTag = [...document.querySelectorAll('#lib-filters .filter-tag')].find(t => t.textContent === '全部');
     document.querySelectorAll('.filter-tag').forEach(t => t.classList.remove('active'));
-    el.classList.add('active');
+    // 再次点击已选中的分类 => 取消筛选，回到“全部”
+    if (alreadyActive && cat !== '全部') {
+        if (allTag) allTag.classList.add('active');
+        cat = '全部';
+    } else {
+        el.classList.add('active');
+    }
     currentSearchCategory = cat;
     currentSearchQuery = '';
     const input = document.getElementById('lib-search-input');
@@ -1055,7 +1063,7 @@ function renderS2HTML(data) {
             <input type="checkbox" data-tag="__CUSTOM__" onchange="toggleClarify(this); toggleCustomInput(this)">
             <span>${c.label}</span>
         </label>
-        <textarea id="clarify-custom-text" class="clarify-custom-input" placeholder="请描述你的情况（例如：饭后反酸、半夜容易醒）" rows="2" disabled style="width:100%; border:1px solid var(--border-color); border-radius:12px; padding:12px; font-size:14px; background:white; resize:none; margin-top:-4px"></textarea>`;
+        <textarea id="clarify-custom-text" class="clarify-custom-input" placeholder="请描述你的情况（例如：饭后反酸、半夜容易醒）" rows="2" style="width:100%; border:1px solid var(--border-color); border-radius:12px; padding:12px; font-size:14px; background:white; resize:none; margin-top:-4px" onfocus="focusCustomInput(this)" oninput="focusCustomInput(this)"></textarea>`;
         }
         return `
         <label class="clarify-opt${c.negative ? ' clarify-neg' : ''}">
@@ -1083,6 +1091,22 @@ function renderS2HTML(data) {
 function toggleCustomInput(box) {
     const ta = document.getElementById('clarify-custom-text');
     if (ta) ta.disabled = !box.checked;
+}
+// 点击 / 聚焦文本框时自动勾选自定义卡，并取消兜底项
+function focusCustomInput(ta) {
+    const group = document.getElementById('clarify-cards');
+    if (!group) return;
+    const box = group.querySelector('input[data-tag="__CUSTOM__"]');
+    if (!box || box.checked) return;
+    // 若当前勾选了兜底项，先取消兜底，避免自定义文本被禁用
+    const neg = group.querySelector('.clarify-neg input[type=checkbox]:checked');
+    if (neg) {
+        neg.checked = false;
+        const cta = document.getElementById('clarify-custom-text');
+        if (cta) cta.disabled = false;
+    }
+    box.checked = true;
+    if (ta && ta.disabled) ta.disabled = false;
 }
 // 多选排他：勾选兜底项则清空其它（含自定义）；勾选其它则清空兜底
 function toggleClarify(box) {
@@ -1133,6 +1157,8 @@ function renderS3HTML(data) {
     const p = data.ui_card_payload || {};
     const associated = (p.associated_symptoms || []).map(t => `<li>${t}</li>`).join('');
     const negative = (p.confirmed_negative || []).map(t => `<li>${t}</li>`).join('');
+    const customNotes = (p.custom_notes || []).filter(Boolean);
+    const customBlock = customNotes.length ? `<div class="sc-block"><div class="sc-label">你补充的其它情况</div><ul class="sc-list">${customNotes.map(n => `<li>${n}</li>`).join('')}</ul></div>` : '';
     return `
         <div class="fade-in">
             <h2 style="text-align:center; margin-bottom:24px">${p.card_title || '确认您的身体信号'}</h2>
@@ -1144,6 +1170,7 @@ function renderS3HTML(data) {
                     </div>
                     ${associated.length ? `<div class="sc-block"><div class="sc-label">兼带细节</div><ul class="sc-list">${associated}</ul></div>` : ''}
                     ${negative.length ? `<div class="sc-block"><div class="sc-label">已排除 / 无异常</div><ul class="sc-list sc-negative">${negative}</ul></div>` : ''}
+                    ${customBlock}
                     <div class="sc-block sc-note">${p.synthesized_symptom_text || ''}</div>
                 </div>
                 <div style="margin-top:40px; text-align:center; display:flex; gap:16px; justify-content:center">

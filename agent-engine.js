@@ -308,6 +308,12 @@
         const primary = extracted.length ? extracted[0].standard : (posSelections[0] || '相关身体表现');
         const associated = extracted.slice(1).map(e => e.standard).concat(posSelections.slice(1));
         const confirmed_negative = Array.from(new Set(negDims));
+        const custom_notes = [];
+        answered.forEach(a => {
+            (a.tags || []).forEach(t => {
+                if (typeof t === 'string' && t.indexOf('custom:') === 0) custom_notes.push(tagLabel(t, ctx.tag_maps));
+            });
+        });
 
         // 深整理感的大段叙述
         let narrative = '';
@@ -333,6 +339,7 @@
                 associated_symptoms: associated,
                 confirmed_negative: confirmed_negative,
                 selected_details: posSelections,
+                custom_notes: custom_notes,
                 synthesized_symptom_text: narrative,
                 action_buttons: [
                     { label: '确认无误，生成报告', action: 'trigger_skill_4', type: 'primary' },

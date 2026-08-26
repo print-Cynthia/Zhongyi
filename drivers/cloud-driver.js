@@ -659,11 +659,9 @@
             return Promise.resolve(det);
         }
 
-        // Skill 1 / Skill 2 / Skill 5：大模型抽取 / 动态追问 / 润色；失败静默降级到确定性实现
-        if (skillId === 'extractor' || skillId === 'clarifier' || skillId === 'formatter') {
-            var llmFn = (skillId === 'extractor') ? extractViaLLM
-                : (skillId === 'clarifier') ? clarifyViaLLM
-                    : formatViaLLM;
+        // Skill 1 / Skill 5：大模型抽取与报告润色；Skill 2 追问改走确定性库（提速+选项更贴合类目）
+        if (skillId === 'extractor' || skillId === 'formatter') {
+            var llmFn = (skillId === 'extractor') ? extractViaLLM : formatViaLLM;
             return Promise.resolve()
                 .then(function () { return llmFn(ctx, input || {}); })
                 .then(function (data) {
@@ -683,6 +681,11 @@
                     fb.meta.cloud_error = String((err && err.message) || err);
                     return fb;
                 });
+        }
+        if (skillId === 'clarifier') {
+            var det = localMock.invoke(skillId, ctx, input || {});
+            if (det && det.meta) det.meta.model = 'local-mock';
+            return Promise.resolve(det);
         }
 
         // Skill 0/3/4：确定性引擎（检索与安全），不调用大模型
