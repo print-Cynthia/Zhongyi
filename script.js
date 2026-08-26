@@ -1242,6 +1242,10 @@ function renderS5HTML(data) {
                 <p style="font-size:12px; color:var(--text-muted)">报告生成时间：${new Date().toLocaleString()}</p>
             </div>
 
+            <div class="report-disclaimer-top">
+                ${sec.disclaimer || '提示：本报告仅用于身体表现整理和中医知识学习，不构成医疗诊断或处方建议。'}
+            </div>
+
             <div class="report-section">
                 <h5>通俗译释</h5>
                 <div class="report-content">${sec.tcm_explanation_section || ''}</div>
