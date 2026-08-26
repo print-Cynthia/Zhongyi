@@ -1087,10 +1087,10 @@ function renderS2HTML(data) {
         </div>
     `;
 }
-// 自定义输入框随 checkbox 启用 / 禁用
+// 自定义输入框始终可输入；checkbox 仅作为视觉提示，不再禁用文本框
 function toggleCustomInput(box) {
     const ta = document.getElementById('clarify-custom-text');
-    if (ta) ta.disabled = !box.checked;
+    if (ta) ta.disabled = false;
 }
 // 点击 / 聚焦文本框时自动勾选自定义卡，并取消兜底项
 function focusCustomInput(ta) {
@@ -1127,15 +1127,15 @@ function symptomAnswerMulti() {
     const group = document.getElementById('clarify-cards');
     if (!group) return;
     const tags = [];
+    const hasNeg = group.querySelector('.clarify-neg input[type=checkbox]:checked');
+    const customBox = group.querySelector('input[data-tag="__CUSTOM__"]');
+    const ta = document.getElementById('clarify-custom-text');
+    const customTxt = (ta && ta.value || '').trim();
+    // 自定义补充：只要输入框有内容就提交，无需先勾选 checkbox；但勾选「以上均无」兜底时忽略
+    if (customTxt && !hasNeg) tags.push('custom:' + customTxt);
     group.querySelectorAll('input[type=checkbox]:checked').forEach(b => {
         const t = b.getAttribute('data-tag');
-        if (t === '__CUSTOM__') {
-            const ta = document.getElementById('clarify-custom-text');
-            const txt = (ta && ta.value || '').trim();
-            if (txt) tags.push('custom:' + txt);   // 自定义文本以 custom: 前缀透传，检索端自动忽略
-        } else {
-            tags.push(t);
-        }
+        if (t && t !== '__CUSTOM__') tags.push(t);
     });
     if (!tags.length) { alert('请至少选择一项；若无对应情况，请勾选「以上均无」。'); return; }
     symptomClarifyLocked = true;
